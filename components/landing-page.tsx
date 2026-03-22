@@ -5,12 +5,14 @@ import type { FormEvent, RefObject } from "react";
 import {
   ArrowRight,
   ChevronRight,
+  Chrome,
   LayoutDashboard,
   Loader2,
   Mail,
   MessageSquareText,
   Radar,
   WandSparkles,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth/auth-context";
 
@@ -139,6 +141,109 @@ function getInitials(name: string) {
   return parts.map((p) => p[0]?.toUpperCase() ?? "").join("");
 }
 
+function AuthModal({
+  email,
+  error,
+  isGoogleLoading,
+  isOpen,
+  isSendingLink,
+  linkSentTo,
+  onClose,
+  onEmailChange,
+  onGoogleSignIn,
+  onSubmit,
+}: {
+  email: string;
+  error: string | null;
+  isGoogleLoading: boolean;
+  isOpen: boolean;
+  isSendingLink: boolean;
+  linkSentTo: string | null;
+  onClose: () => void;
+  onEmailChange: (value: string) => void;
+  onGoogleSignIn: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <div className="auth-modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="auth-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-modal-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="auth-modal-header">
+          <div>
+            <div className="auth-modal-eyebrow">Protected Workspace</div>
+            <h2 id="auth-modal-title" className="auth-modal-title">
+              Sign in to Friday
+            </h2>
+          </div>
+          <button type="button" className="auth-modal-close" onClick={onClose}>
+            <X style={{ width: 16, height: 16 }} />
+          </button>
+        </div>
+
+        <p className="auth-modal-copy">
+          Sign in with Google or use a Supabase magic link to unlock the dashboard
+          and continue into the company workspace.
+        </p>
+
+        <button
+          type="button"
+          className="auth-secondary-btn"
+          onClick={onGoogleSignIn}
+          disabled={isGoogleLoading || isSendingLink}
+        >
+          <Chrome style={{ width: 16, height: 16 }} />
+          <span>{isGoogleLoading ? "Redirecting to Google..." : "Continue with Google"}</span>
+        </button>
+
+        <div className="auth-divider">
+          <span>or</span>
+        </div>
+
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label className="auth-form-label" htmlFor="auth-email">
+            Work email
+          </label>
+          <div className="auth-form-field">
+            <Mail style={{ width: 16, height: 16, color: "var(--muted)" }} />
+            <input
+              id="auth-email"
+              type="email"
+              className="auth-form-input"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+              autoComplete="email"
+              required
+            />
+          </div>
+
+          <button type="submit" className="auth-primary-btn" disabled={isSendingLink}>
+            {isSendingLink ? "Sending magic link..." : "Send magic link"}
+          </button>
+        </form>
+
+        {linkSentTo && (
+          <div className="auth-form-help auth-form-help-success">
+            Magic link sent to <strong>{linkSentTo}</strong>. Open the email on
+            this device to finish sign-in.
+          </div>
+        )}
+
+        {error && <div className="auth-form-help auth-form-help-error">{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 export function DashboardEntry({
   isAnalysisRunning,
   terminalInput,
@@ -148,7 +253,23 @@ export function DashboardEntry({
   onSubmit,
   landingExamples,
 }: DashboardEntryProps) {
-  const { session, isAuthLoading, authEnabled, openAuthModal, handleSignOut } = useAuth();
+  const {
+    session,
+    isAuthLoading,
+    authEnabled,
+    authError,
+    isAuthModalOpen,
+    authEmail,
+    linkSentTo,
+    isSendingLink,
+    isGoogleLoading,
+    openAuthModal,
+    closeAuthModal,
+    setAuthEmail,
+    handleSendMagicLink,
+    handleGoogleSignIn,
+    handleSignOut,
+  } = useAuth();
   const displayName = getDisplayName(session);
   const avatarUrl = getAvatarUrl(session);
   const email = session?.user.email ?? "Workspace access enabled";
@@ -334,6 +455,19 @@ export function DashboardEntry({
           </div>
         </section>
       </main>
+
+      <AuthModal
+        email={authEmail}
+        error={visibleAuthError ?? authError}
+        isGoogleLoading={isGoogleLoading}
+        isOpen={isAuthModalOpen}
+        isSendingLink={isSendingLink}
+        linkSentTo={linkSentTo}
+        onClose={closeAuthModal}
+        onEmailChange={setAuthEmail}
+        onGoogleSignIn={handleGoogleSignIn}
+        onSubmit={handleSendMagicLink}
+      />
     </div>
   );
 }
@@ -343,7 +477,21 @@ export function DashboardEntry({
 /* ------------------------------------------------------------------ */
 
 export function LandingPage() {
-  const { authEnabled, isAuthLoading, authError, openAuthModal } = useAuth();
+  const {
+    authEnabled,
+    isAuthLoading,
+    authError,
+    isAuthModalOpen,
+    authEmail,
+    linkSentTo,
+    isSendingLink,
+    isGoogleLoading,
+    openAuthModal,
+    closeAuthModal,
+    setAuthEmail,
+    handleSendMagicLink,
+    handleGoogleSignIn,
+  } = useAuth();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -642,6 +790,19 @@ export function LandingPage() {
           </div>
         </div>
       </footer>
+
+      <AuthModal
+        email={authEmail}
+        error={authError}
+        isGoogleLoading={isGoogleLoading}
+        isOpen={isAuthModalOpen}
+        isSendingLink={isSendingLink}
+        linkSentTo={linkSentTo}
+        onClose={closeAuthModal}
+        onEmailChange={setAuthEmail}
+        onGoogleSignIn={handleGoogleSignIn}
+        onSubmit={handleSendMagicLink}
+      />
     </div>
   );
 }

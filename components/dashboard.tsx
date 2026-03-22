@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
-import { OnboardingWizard } from "./onboarding-wizard";
+import { usePathname, useRouter } from "next/navigation";
+import { OnboardingWizard, type WizardStep } from "./onboarding-wizard";
 import { Workspace } from "./workspace";
 import { useAuth } from "@/lib/auth/auth-context";
 import {
@@ -90,6 +90,54 @@ type GeneratedAdImage = {
     logo: string | null;
   };
 };
+
+type StoredWorkspaceState = {
+  version: 1;
+  siteUrl: string | null;
+  competitors: CompetitorRecord[];
+  brandVoiceDoc: BrandVoiceDoc | null;
+  analysis: AnalysisState;
+};
+
+const WORKSPACE_STATE_STORAGE_KEY = "friday-workspace-state-v1";
+
+function readStoredWorkspaceState(): StoredWorkspaceState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_STATE_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as StoredWorkspaceState;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredWorkspaceState(value: StoredWorkspaceState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(WORKSPACE_STATE_STORAGE_KEY, JSON.stringify(value));
+}
+
+function clearStoredWorkspaceState() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(WORKSPACE_STATE_STORAGE_KEY);
+}
 
 function normalizeSiteUrl(value: string) {
   const trimmed = value.trim();
@@ -508,7 +556,16 @@ function useAnalysisPipeline({
     setState((prev) => ({ ...prev, isRunning: false }));
   }, []);
 
-  return { ...state, startAnalysis, stopAnalysis };
+  const hydrateState = useCallback((nextState: Partial<AnalysisState>) => {
+    setState((prev) => ({ ...prev, ...nextState }));
+  }, []);
+
+  const resetState = useCallback(() => {
+    abortRef.current?.abort();
+    setState(initialAnalysisState);
+  }, []);
+
+  return { ...state, startAnalysis, stopAnalysis, hydrateState, resetState };
 }
 
 /* ------------------------------------------------------------------ */
@@ -972,6 +1029,7 @@ function AuthModal({
 }
 
 export function Dashboard() {
+  const pathname = usePathname();
   const router = useRouter();
   const {
     authEnabled,
@@ -994,7 +1052,6 @@ export function Dashboard() {
     handleSignOut,
   } = useAuth();
 
-  const [wizardComplete, setWizardComplete] = useState(false);
   const [terminalInput, setTerminalInput] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -1016,22 +1073,67 @@ export function Dashboard() {
   const [adError, setAdError] = useState<string | null>(null);
   const [adPrompt, setAdPrompt] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [hasHydratedWorkspaceState, setHasHydratedWorkspaceState] = useState(false);
   const isSiteLoaded = Boolean(currentSiteUrl);
   const singlePageWorkflow = true;
   const brand = useBrandMeta(currentSiteUrl);
   const attemptedDiscoveryRef = useRef(false);
+  const resumedAnalysisRef = useRef(false);
+
+  const isDashboardEntryRoute = pathname === "/dashboard";
+  const isWorkspaceSetupRoute = pathname === "/workspace/setup";
+  const isWorkspaceRoute = pathname === "/workspace";
 
   const analysis = useAnalysisPipeline({
     accessToken: session?.access_token,
     authRequired: authEnabled,
   });
+  const hydrateAnalysisState = analysis.hydrateState;
+  const resetAnalysisState = analysis.resetState;
+  const startSiteAnalysis = analysis.startAnalysis;
 
   // Redirect to landing if not authenticated
   useEffect(() => {
     if (authEnabled && !isAuthLoading && !session) {
+      clearStoredWorkspaceState();
       router.replace("/");
     }
   }, [authEnabled, isAuthLoading, session, router]);
+
+  useEffect(() => {
+    if (!isWorkspaceSetupRoute && !isWorkspaceRoute) {
+      setHasHydratedWorkspaceState(true);
+      return;
+    }
+
+    const storedState = readStoredWorkspaceState();
+
+    if (storedState) {
+      setCurrentSiteUrl(storedState.siteUrl);
+      setCompetitors(normalizeCompetitorRecords(storedState.competitors));
+      setBrandVoiceDoc(storedState.brandVoiceDoc);
+      hydrateAnalysisState({
+        ...storedState.analysis,
+        competitors: normalizeCompetitorRecords(storedState.analysis.competitors),
+        isRunning: false,
+      });
+      setTerminalInput(storedState.siteUrl ?? "");
+    } else {
+      setCurrentSiteUrl(null);
+      setCompetitors([]);
+      setBrandVoiceDoc(null);
+      resetAnalysisState();
+      setTerminalInput("");
+    }
+
+    resumedAnalysisRef.current = false;
+    setHasHydratedWorkspaceState(true);
+  }, [
+    hydrateAnalysisState,
+    isWorkspaceRoute,
+    isWorkspaceSetupRoute,
+    resetAnalysisState,
+  ]);
 
   const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
   const workspaceDomain = currentDomain.replace(/^www\./, "");
@@ -1510,9 +1612,6 @@ export function Dashboard() {
   ]);
 
   useEffect(() => {
-    setBrandVoiceDoc(null);
-    setBrandVoiceError(null);
-    setIsBrandVoiceLoading(false);
     setChatMessages([]);
     setChatInput("");
     setIsChatLoading(false);
@@ -1522,6 +1621,92 @@ export function Dashboard() {
     setAdError(null);
     setAdPrompt("");
   }, [currentSiteUrl]);
+
+  useEffect(() => {
+    if (!hasHydratedWorkspaceState || (!isWorkspaceSetupRoute && !isWorkspaceRoute)) {
+      return;
+    }
+
+    if (!currentSiteUrl && !analysis.productAnalysis) {
+      return;
+    }
+
+    writeStoredWorkspaceState({
+      version: 1,
+      siteUrl: currentSiteUrl,
+      competitors,
+      brandVoiceDoc,
+      analysis: {
+        isRunning: analysis.isRunning,
+        currentStep: analysis.currentStep,
+        stepLabel: analysis.stepLabel,
+        productAnalysis: analysis.productAnalysis,
+        competitors: analysis.competitors,
+        competitorAnalyses: analysis.competitorAnalyses,
+        insights: analysis.insights,
+        errors: analysis.errors,
+      },
+    });
+  }, [
+    analysis.competitorAnalyses,
+    analysis.competitors,
+    analysis.currentStep,
+    analysis.errors,
+    analysis.insights,
+    analysis.isRunning,
+    analysis.productAnalysis,
+    analysis.stepLabel,
+    brandVoiceDoc,
+    competitors,
+    currentSiteUrl,
+    hasHydratedWorkspaceState,
+    isWorkspaceRoute,
+    isWorkspaceSetupRoute,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isWorkspaceSetupRoute ||
+      !hasHydratedWorkspaceState ||
+      !currentSiteUrl ||
+      analysis.productAnalysis ||
+      analysis.isRunning ||
+      resumedAnalysisRef.current
+    ) {
+      return;
+    }
+
+    resumedAnalysisRef.current = true;
+    void startSiteAnalysis(currentSiteUrl);
+  }, [
+    analysis.isRunning,
+    analysis.productAnalysis,
+    currentSiteUrl,
+    startSiteAnalysis,
+    hasHydratedWorkspaceState,
+    isWorkspaceSetupRoute,
+  ]);
+
+  useEffect(() => {
+    if (!isWorkspaceRoute || !hasHydratedWorkspaceState) {
+      return;
+    }
+
+    if (!currentSiteUrl) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    if (!analysis.productAnalysis) {
+      router.replace("/workspace/setup");
+    }
+  }, [
+    analysis.productAnalysis,
+    currentSiteUrl,
+    hasHydratedWorkspaceState,
+    isWorkspaceRoute,
+    router,
+  ]);
 
   useEffect(() => {
     if (!isSiteLoaded) {
@@ -1575,6 +1760,19 @@ export function Dashboard() {
     };
   }, [isAuthMenuOpen]);
 
+  function beginWorkspaceSetup() {
+    clearStoredWorkspaceState();
+    resumedAnalysisRef.current = false;
+    setTerminalError(null);
+    setCurrentSiteUrl(null);
+    setCompetitors([]);
+    setBrandVoiceDoc(null);
+    setBrandVoiceError(null);
+    setIsBrandVoiceLoading(false);
+    resetAnalysisState();
+    router.push("/workspace/setup");
+  }
+
   function handleTerminalSubmit(event?: FormEvent) {
     event?.preventDefault();
 
@@ -1594,9 +1792,14 @@ export function Dashboard() {
     }
 
     setTerminalError(null);
+    resumedAnalysisRef.current = true;
+    setCompetitors([]);
+    setBrandVoiceDoc(null);
+    setBrandVoiceError(null);
+    setIsBrandVoiceLoading(false);
     setCurrentSiteUrl(nextSiteUrl);
     setTerminalInput("");
-    void analysis.startAnalysis(nextSiteUrl);
+    void startSiteAnalysis(nextSiteUrl);
   }
 
   function handleChatSubmit(event?: FormEvent, presetPrompt?: string) {
@@ -1731,9 +1934,47 @@ export function Dashboard() {
     );
   }
 
-  if (!wizardComplete && (showWorkspaceEntry || analysis.isRunning)) {
+  const setupInitialStep: WizardStep = isDashboardEntryRoute
+    ? 1
+    : analysis.productAnalysis
+      ? 4
+      : currentSiteUrl
+        ? 3
+        : 2;
+
+  if (isDashboardEntryRoute) {
     return (
       <OnboardingWizard
+        initialStep={1}
+        isAnalysisRunning={false}
+        terminalInput=""
+        visibleAuthError={visibleAuthError}
+        terminalInputRef={terminalInputRef}
+        onInputChange={() => {}}
+        onSubmit={() => {}}
+        landingExamples={landingExamples}
+        analysisCurrentStep={0}
+        stepLabel=""
+        productAnalysis={null}
+        analysisErrors={[]}
+        onContinueFromStep1={beginWorkspaceSetup}
+        onComplete={beginWorkspaceSetup}
+      />
+    );
+  }
+
+  if (isWorkspaceSetupRoute) {
+    if (!hasHydratedWorkspaceState) {
+      return (
+        <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
+          Preparing workspace setup...
+        </div>
+      );
+    }
+
+    return (
+      <OnboardingWizard
+        initialStep={setupInitialStep}
         isAnalysisRunning={analysis.isRunning}
         terminalInput={terminalInput}
         visibleAuthError={visibleAuthError}
@@ -1748,13 +1989,21 @@ export function Dashboard() {
         stepLabel={analysis.stepLabel ?? ""}
         productAnalysis={analysis.productAnalysis}
         analysisErrors={analysis.errors}
-        onComplete={() => setWizardComplete(true)}
+        onBackFromStep2={() => router.push("/dashboard")}
+        onComplete={() => router.push("/workspace")}
       />
     );
   }
 
-  // New workspace view after wizard completes
-  if (wizardComplete && currentSiteUrl && analysis.productAnalysis) {
+  if (isWorkspaceRoute) {
+    if (!hasHydratedWorkspaceState || !currentSiteUrl || !analysis.productAnalysis) {
+      return (
+        <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">
+          Loading workspace...
+        </div>
+      );
+    }
+
     return (
       <Workspace
         siteUrl={currentSiteUrl}
@@ -1763,16 +2012,14 @@ export function Dashboard() {
         competitorAnalyses={analysis.competitorAnalyses}
         insights={analysis.insights}
         brandVoiceDoc={brandVoiceDoc}
-        brandContext={{
-          brandName: analysis.productAnalysis.brandName,
-          oneLiner: analysis.productAnalysis.oneLiner,
-          targetAudience: analysis.productAnalysis.targetAudience.join(", "),
+        brandContext={buildMarketingContext({
+          brand,
+          brandVoiceDoc,
+          competitors,
+          productAnalysis: analysis.productAnalysis,
+          insights: analysis.insights,
           siteUrl: currentSiteUrl,
-          brandVoice: [
-            ...(analysis.productAnalysis.brandVoice ?? []),
-          ],
-          competitors: competitors.map((c) => c.domain),
-        }}
+        })}
       />
     );
   }

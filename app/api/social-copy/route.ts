@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { FridayContext } from "@/lib/agents/core/context";
 import { runFridayChat } from "@/lib/agents/friday";
 import { requireSession } from "@/lib/auth/session";
+import { getTweetPlaybook, PLAYBOOK_PDF_PATH } from "@/lib/content/tweet-playbook";
 import { hasAI } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -33,8 +34,37 @@ export async function POST(request: Request) {
   }
 
   const context: FridayContext = body.brandContext ?? {};
+  const tweetPlaybook = await getTweetPlaybook();
 
-  const prompt = `Generate a social media content pack for ${context.brandName ?? "this brand"}. I need:
+  if (!tweetPlaybook) {
+    return NextResponse.json(
+      {
+        error: `Social copy is disabled until the tweet playbook PDF is available at ${PLAYBOOK_PDF_PATH}.`,
+      },
+      { status: 412 },
+    );
+  }
+
+  const prompt = `Generate a social media content pack for ${context.brandName ?? "this brand"}.
+
+You MUST use the attached tweet playbook as the writing system behind the output. Do not ignore it, do not substitute your own framework, and do not produce content if you cannot follow it.
+
+Use the playbook to shape:
+- the hook
+- the emotional payload
+- the narrative progression
+- the curiosity gap
+- specificity, numbers, and authority
+- the X post in particular
+
+Adapt the same playbook to Instagram and LinkedIn without sounding robotic.
+
+Playbook source: ${tweetPlaybook.sourcePath}
+
+PLAYBOOK:
+${tweetPlaybook.text}
+
+Now create the content pack. I need:
 
 1. **Instagram Post** - A compelling caption (2-4 sentences) with a hook, value prop, and CTA. Include 3-5 relevant hashtags at the end.
 

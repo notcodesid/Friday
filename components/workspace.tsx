@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
   Copy,
@@ -16,18 +16,6 @@ import {
 import { useAuth } from "@/lib/auth/auth-context";
 import type { ProductAnalysis, CompetitorAnalysis, CompetitiveInsights, BrandVoiceDoc } from "@/lib/agents/schemas";
 import type { FridayContext } from "@/lib/agents/core/context";
-
-type GeneratedAdImage = {
-  format: string;
-  mimeType: string;
-  imageBase64: string;
-  brandAssets?: {
-    brandName: string;
-    colors: string[];
-    fonts: string[];
-    logo: string | null;
-  };
-};
 
 type SocialCopy = {
   instagram: string;
@@ -61,7 +49,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }}
-      className="inline-flex items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-3 py-1.5 text-xs font-medium text-[#6b7280] transition hover:border-[#d1d5db] hover:text-[#111111]"
+      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/62 transition hover:border-white/20 hover:text-white"
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
       {label ?? (copied ? "Copied" : "Copy")}
@@ -79,9 +67,6 @@ export function Workspace({
   brandContext,
 }: WorkspaceProps) {
   const { session } = useAuth();
-  const [generatedAds, setGeneratedAds] = useState<GeneratedAdImage[]>([]);
-  const [isGeneratingAds, setIsGeneratingAds] = useState(false);
-  const [adError, setAdError] = useState<string | null>(null);
   const [socialCopy, setSocialCopy] = useState<SocialCopy | null>(null);
   const [isGeneratingCopy, setIsGeneratingCopy] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -91,42 +76,13 @@ export function Workspace({
     try { return new URL(siteUrl).hostname.replace(/^www\./, ""); } catch { return siteUrl; }
   })();
 
-  const headers: Record<string, string> = {};
-  if (session?.access_token) {
-    headers.Authorization = `Bearer ${session.access_token}`;
-  }
-
-  // Auto-generate ads on mount
-  const generateAds = useCallback(async () => {
-    if (isGeneratingAds) return;
-    setIsGeneratingAds(true);
-    setAdError(null);
-
-    const formats = ["instagram-post", "x-post", "instagram-story"] as const;
-    const results: GeneratedAdImage[] = [];
-
-    for (const format of formats) {
-      try {
-        const res = await fetch("/api/brand-ads", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...headers },
-          body: JSON.stringify({ siteUrl, format }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          results.push(data);
-          setGeneratedAds([...results]);
-        }
-      } catch {
-        // Continue with other formats
-      }
+  const headers = useMemo(() => {
+    const nextHeaders: Record<string, string> = {};
+    if (session?.access_token) {
+      nextHeaders.Authorization = `Bearer ${session.access_token}`;
     }
-
-    if (results.length === 0) {
-      setAdError("Failed to generate graphics. Check your Gemini API key.");
-    }
-    setIsGeneratingAds(false);
-  }, [siteUrl, session?.access_token]);
+    return nextHeaders;
+  }, [session?.access_token]);
 
   // Auto-generate social copy on mount
   const generateSocialCopy = useCallback(async () => {
@@ -154,12 +110,11 @@ export function Workspace({
     } finally {
       setIsGeneratingCopy(false);
     }
-  }, [brandContext, session?.access_token]);
+  }, [brandContext, headers, isGeneratingCopy]);
 
   useEffect(() => {
-    generateAds();
     generateSocialCopy();
-  }, []);
+  }, [generateSocialCopy]);
 
   // Download report
   async function downloadReport() {
@@ -224,267 +179,246 @@ export function Workspace({
   }
 
   return (
-    <div className="relative min-h-screen bg-[#f8fafc] text-[#111111] font-[Inter,sans-serif]">
+    <div className="relative min-h-screen bg-[#050505] text-white font-[Inter,sans-serif]">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,94,0,0.14),transparent_22%),radial-gradient(circle_at_top_right,rgba(255,255,255,0.04),transparent_22%),linear-gradient(180deg,#050505_0%,#090909_100%)]" />
 
-      {/* Header */}
-      <header className="sticky top-0 z-40 border-b border-[#e5e7eb] bg-white/90 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-[1360px] items-center justify-between px-6 py-5 md:px-10">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full border border-[#e5e7eb] bg-[#f9fafb] text-xl">
-              🦸
-            </div>
-            <div>
-              <div className="text-lg font-semibold tracking-[-0.05em] text-[#111111]">
-                Friday<span className="text-[#2563eb]">.</span>
+      <header className="sticky top-0 z-40 px-6 pt-5 md:px-10 md:pt-6">
+        <div className="mx-auto max-w-[1360px]">
+          <div className="flex min-h-[78px] items-center justify-between rounded-full border border-white/10 bg-[#121212]/92 px-6 shadow-[0_22px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:px-10">
+            <div className="flex items-center gap-4">
+              <div className="text-[1.15rem] font-semibold tracking-[-0.05em] text-white">
+                Friday<span className="text-[#ff5e00]">.</span>
               </div>
-              <div className="text-xs text-[#9ca3af]">{domain}</div>
+              <div className="hidden h-5 w-px bg-white/10 md:block" />
+              <div className="hidden text-sm text-white/45 md:block">{domain}</div>
             </div>
-          </div>
 
-          <button
-            type="button"
-            onClick={downloadReport}
-            disabled={isDownloading}
-            className="inline-flex items-center gap-2 rounded-full bg-[#111111] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#222222] disabled:opacity-50"
-          >
-            {isDownloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-            Download Report
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="relative z-10 mx-auto max-w-[1360px] px-6 py-8 md:px-10 md:py-12">
-
-        {/* Hero */}
-        <div className="mb-12">
-          <h1 className="text-[clamp(2rem,4vw,3.2rem)] font-semibold tracking-[-0.04em] text-[#111111]">
-            {productAnalysis.brandName}
-          </h1>
-          <p className="mt-2 max-w-[60ch] text-lg text-[#6b7280]">
-            {productAnalysis.oneLiner}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {productAnalysis.targetAudience.map((a) => (
-              <span key={a} className="rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-3 py-1 text-xs font-medium text-[#6b7280]">
-                {a}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        {/* Graphics Section */}
-        <section className="mb-12">
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f9fafb] text-[#2563eb]">
-                <ImageIcon size={20} />
-              </div>
-              <div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em] text-[#111111]">Generated Graphics</h2>
-                <p className="text-sm text-[#9ca3af]">Brand ads for your social channels</p>
-              </div>
-            </div>
-            {!isGeneratingAds && (
-              <button
-                type="button"
-                onClick={generateAds}
-                className="flex items-center gap-2 rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-4 py-2 text-sm font-medium text-[#6b7280] transition hover:border-[#d1d5db] hover:text-[#111111]"
-              >
-                <RefreshCw size={14} />
-                Regenerate
-              </button>
-            )}
-          </div>
-
-          {isGeneratingAds && generatedAds.length === 0 && (
-            <div className="flex items-center gap-3 rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-8">
-              <Loader2 size={18} className="animate-spin text-[#2563eb]" />
-              <span className="text-sm text-[#6b7280]">Generating brand graphics...</span>
-            </div>
-          )}
-
-          {adError && (
-            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-[#dc2626]">
-              {adError}
-            </div>
-          )}
-
-          <div className="grid gap-4 md:grid-cols-3">
-            {generatedAds.map((ad, idx) => (
-              <div key={idx} className="group overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`data:${ad.mimeType};base64,${ad.imageBase64}`}
-                  alt={`${ad.format} ad`}
-                  className="w-full"
-                />
-                <div className="flex items-center justify-between p-3">
-                  <span className="text-xs font-medium text-[#9ca3af]">{ad.format.replace("-", " ")}</span>
-                  <a
-                    href={`data:${ad.mimeType};base64,${ad.imageBase64}`}
-                    download={`${productAnalysis.brandName}_${ad.format}.png`}
-                    className="flex items-center gap-1.5 rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-3 py-1.5 text-xs font-medium text-[#6b7280] transition hover:text-[#111111]"
-                  >
-                    <Download size={12} />
-                    Save
-                  </a>
-                </div>
-              </div>
-            ))}
-            {isGeneratingAds && generatedAds.length > 0 && generatedAds.length < 3 && (
-              <div className="flex items-center justify-center rounded-2xl border border-dashed border-[#e5e7eb] bg-white shadow-sm p-12">
-                <Loader2 size={18} className="animate-spin text-[#d1d5db]" />
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Social Copy Section */}
-        <section className="mb-12">
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f9fafb] text-[#2563eb]">
-                <FileText size={20} />
-              </div>
-              <div>
-                <h2 className="text-xl font-semibold tracking-[-0.03em] text-[#111111]">Social Copy</h2>
-                <p className="text-sm text-[#9ca3af]">Ready-to-post content for your channels</p>
-              </div>
-            </div>
-            {!isGeneratingCopy && socialCopy && (
-              <button
-                type="button"
-                onClick={generateSocialCopy}
-                className="flex items-center gap-2 rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-4 py-2 text-sm font-medium text-[#6b7280] transition hover:border-[#d1d5db] hover:text-[#111111]"
-              >
-                <RefreshCw size={14} />
-                Regenerate
-              </button>
-            )}
-          </div>
-
-          {isGeneratingCopy && (
-            <div className="flex items-center gap-3 rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-8">
-              <Loader2 size={18} className="animate-spin text-[#2563eb]" />
-              <span className="text-sm text-[#6b7280]">Generating social copy...</span>
-            </div>
-          )}
-
-          {copyError && (
-            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-[#dc2626]">
-              {copyError}
-            </div>
-          )}
-
-          {socialCopy && (
-            <div className="grid gap-4 md:grid-cols-3">
-              {/* Instagram */}
-              <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Instagram size={16} className="text-pink-400" />
-                    <span className="text-sm font-semibold text-[#111111]">Instagram</span>
-                  </div>
-                  <CopyButton text={socialCopy.instagram} />
-                </div>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#4b5563]">
-                  {socialCopy.instagram || "No caption generated."}
-                </p>
-              </div>
-
-              {/* X / Twitter */}
-              <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Twitter size={16} className="text-blue-400" />
-                    <span className="text-sm font-semibold text-[#111111]">X (Twitter)</span>
-                  </div>
-                  <CopyButton text={socialCopy.x} />
-                </div>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#4b5563]">
-                  {socialCopy.x || "No tweet generated."}
-                </p>
-                <div className="mt-3 text-xs text-[#d1d5db]">
-                  {socialCopy.x.length}/280 characters
-                </div>
-              </div>
-
-              {/* LinkedIn */}
-              <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Linkedin size={16} className="text-blue-500" />
-                    <span className="text-sm font-semibold text-[#111111]">LinkedIn</span>
-                  </div>
-                  <CopyButton text={socialCopy.linkedin} />
-                </div>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#4b5563]">
-                  {socialCopy.linkedin || "No post generated."}
-                </p>
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* Quick Stats */}
-        <section className="mb-12">
-          <div className="grid gap-4 md:grid-cols-4">
-            <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#9ca3af]">Positioning</div>
-              <p className="mt-3 text-sm leading-relaxed text-[#4b5563]">{productAnalysis.positioning}</p>
-            </div>
-            <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#9ca3af]">Competitors</div>
-              <div className="mt-3 text-2xl font-semibold text-[#111111]">{competitors.length}</div>
-              <div className="mt-1 text-sm text-[#9ca3af]">tracked in landscape</div>
-            </div>
-            <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#9ca3af]">Opportunities</div>
-              <div className="mt-3 text-2xl font-semibold text-[#111111]">{insights?.opportunities.length ?? 0}</div>
-              <div className="mt-1 text-sm text-[#9ca3af]">campaign angles found</div>
-            </div>
-            <div className="rounded-2xl border border-[#e5e7eb] bg-white shadow-sm p-5">
-              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[#9ca3af]">Brand Voice</div>
-              <div className="mt-3 text-sm leading-relaxed text-[#4b5563]">
-                {brandVoiceDoc?.identity ?? productAnalysis.brandVoice.join(", ")}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Differentiators */}
-        <section className="mb-12">
-          <h2 className="mb-4 text-lg font-semibold tracking-[-0.03em] text-[#111111]">Key Differentiators</h2>
-          <div className="grid gap-3 md:grid-cols-2">
-            {productAnalysis.differentiators.map((d, i) => (
-              <div key={i} className="rounded-xl border border-[#e5e7eb] bg-white shadow-sm px-5 py-4">
-                <p className="text-sm text-[#4b5563]">{d}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* Footer */}
-        <footer className="border-t border-[#f0f0f0] pt-6 pb-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 text-[#9ca3af]">
-              <span className="text-lg font-semibold tracking-[-0.05em]">
-                Friday<span className="text-[#2563eb]">.</span>
-              </span>
-              <span className="text-xs">Marketing Intelligence</span>
-            </div>
             <button
               type="button"
               onClick={downloadReport}
               disabled={isDownloading}
-              className="flex items-center gap-2 text-sm font-medium text-[#9ca3af] transition hover:text-[#111111]"
+              className="inline-flex items-center gap-2 rounded-full bg-[#ff5e00] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#e65400] disabled:opacity-50"
             >
-              <Download size={14} />
-              Download full report
+              {isDownloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              Download Report
             </button>
           </div>
-        </footer>
+        </div>
+      </header>
+
+      <main className="relative z-10 mx-auto max-w-[1360px] px-6 py-8 md:px-10 md:py-10">
+        <section className="rounded-[36px] border border-white/10 bg-[linear-gradient(180deg,#101521_0%,#0b1019_100%)] p-8 shadow-[0_34px_90px_rgba(15,23,42,0.18)] md:p-10">
+          <div className="text-sm font-semibold uppercase tracking-[0.16em] text-[#ff8a3d]">
+            Company workspace
+          </div>
+          <div className="mt-6 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-[50rem]">
+              <h1 className="text-[clamp(2.6rem,5vw,4.4rem)] font-semibold tracking-[-0.07em] text-white">
+                {productAnalysis.brandName}
+              </h1>
+              <p className="mt-4 max-w-[44rem] text-[1.02rem] leading-[1.85] text-white/62">
+                {productAnalysis.oneLiner}
+              </p>
+            </div>
+            <div className="flex max-w-[28rem] flex-wrap gap-2">
+              {productAnalysis.targetAudience.map((audience) => (
+                <span
+                  key={audience}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/64"
+                >
+                  {audience}
+                </span>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
+          <div className="space-y-6">
+            <section className="rounded-[32px] border border-white/10 bg-[#101010] p-6 shadow-[0_22px_60px_rgba(0,0,0,0.22)]">
+              <div className="mb-6 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#ff5e00]/12 text-[#ff8a3d]">
+                    <ImageIcon size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold tracking-[-0.03em] text-white">Image Generation</h2>
+                    <p className="text-sm text-white/42">Brand graphics are intentionally paused</p>
+                  </div>
+                </div>
+                <span className="rounded-full border border-[#ff5e00]/20 bg-[#ff5e00]/10 px-4 py-2 text-sm font-medium text-[#ff8a3d]">
+                  Paused
+                </span>
+              </div>
+
+              <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-8">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#ff5e00]/12 text-[#ff8a3d]">
+                    <ImageIcon size={20} />
+                  </div>
+                  <div>
+                    <div className="text-[1.02rem] font-semibold tracking-[-0.03em] text-white">
+                      Image generation is paused
+                    </div>
+                    <p className="mt-2 max-w-[44rem] text-sm leading-7 text-white/58">
+                      Friday will not generate poster or ad images right now. Social copy
+                      stays active, but visual asset generation is deliberately turned off.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[32px] border border-white/10 bg-[#101010] p-6 shadow-[0_22px_60px_rgba(0,0,0,0.22)]">
+              <div className="mb-6 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#ff5e00]/12 text-[#ff8a3d]">
+                    <FileText size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold tracking-[-0.03em] text-white">Social Copy</h2>
+                    <p className="text-sm text-white/42">Ready-to-post content for your channels</p>
+                  </div>
+                </div>
+                {!isGeneratingCopy && socialCopy && (
+                  <button
+                    type="button"
+                    onClick={generateSocialCopy}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/62 transition hover:border-white/20 hover:text-white"
+                  >
+                    <RefreshCw size={14} />
+                    Regenerate
+                  </button>
+                )}
+              </div>
+
+              {isGeneratingCopy && (
+                <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-white/[0.03] p-8">
+                  <Loader2 size={18} className="animate-spin text-[#ff8a3d]" />
+                  <span className="text-sm text-white/58">Generating social copy...</span>
+                </div>
+              )}
+
+              {copyError && (
+                <div className="rounded-[24px] border border-[#7f1d1d] bg-[#2a0d0d] p-4 text-sm text-[#fca5a5]">
+                  {copyError}
+                </div>
+              )}
+
+              {socialCopy && (
+                <div className="grid gap-4 xl:grid-cols-3">
+                  <div className="rounded-[24px] border border-white/10 bg-[#151515] p-5">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Instagram size={16} className="text-[#ff8a3d]" />
+                        <span className="text-sm font-semibold text-white">Instagram</span>
+                      </div>
+                      <CopyButton text={socialCopy.instagram} />
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/68">
+                      {socialCopy.instagram || "No caption generated."}
+                    </p>
+                  </div>
+
+                  <div className="rounded-[24px] border border-white/10 bg-[#151515] p-5">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Twitter size={16} className="text-[#ff8a3d]" />
+                        <span className="text-sm font-semibold text-white">X</span>
+                      </div>
+                      <CopyButton text={socialCopy.x} />
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/68">
+                      {socialCopy.x || "No post generated."}
+                    </p>
+                    <div className="mt-3 text-xs text-white/28">
+                      {socialCopy.x.length}/280 characters
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-white/10 bg-[#151515] p-5">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Linkedin size={16} className="text-[#ff8a3d]" />
+                        <span className="text-sm font-semibold text-white">LinkedIn</span>
+                      </div>
+                      <CopyButton text={socialCopy.linkedin} />
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-white/68">
+                      {socialCopy.linkedin || "No post generated."}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div className="space-y-6">
+            <section className="rounded-[32px] border border-white/10 bg-[#101010] p-6 shadow-[0_22px_60px_rgba(0,0,0,0.22)]">
+              <div className="text-sm font-semibold uppercase tracking-[0.14em] text-[#ff8a3d]">
+                Snapshot
+              </div>
+              <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+                <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/38">Positioning</div>
+                  <p className="mt-3 text-sm leading-relaxed text-white/68">{productAnalysis.positioning}</p>
+                </div>
+                <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/38">Competitors</div>
+                  <div className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">{competitors.length}</div>
+                  <div className="mt-1 text-sm text-white/42">tracked in landscape</div>
+                </div>
+                <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/38">Opportunities</div>
+                  <div className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">{insights?.opportunities.length ?? 0}</div>
+                  <div className="mt-1 text-sm text-white/42">campaign angles found</div>
+                </div>
+                <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/38">Brand Voice</div>
+                  <div className="mt-3 text-sm leading-relaxed text-white/68">
+                    {brandVoiceDoc?.identity ?? productAnalysis.brandVoice.join(", ")}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[32px] border border-white/10 bg-[#101010] p-6 shadow-[0_22px_60px_rgba(0,0,0,0.22)]">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-semibold uppercase tracking-[0.14em] text-[#ff8a3d]">
+                    Differentiators
+                  </div>
+                  <h2 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-white">
+                    What stands out in the product
+                  </h2>
+                </div>
+              </div>
+              <div className="mt-5 grid gap-3">
+                {productAnalysis.differentiators.map((differentiator, index) => (
+                  <div key={index} className="rounded-[22px] border border-white/10 bg-white/[0.03] px-5 py-4">
+                    <p className="text-sm leading-relaxed text-white/68">{differentiator}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-[32px] border border-white/10 bg-[#101010] p-6 shadow-[0_22px_60px_rgba(0,0,0,0.22)]">
+              <div className="text-sm font-semibold uppercase tracking-[0.14em] text-[#ff8a3d]">
+                Domain
+              </div>
+              <div className="mt-3 text-lg font-semibold tracking-[-0.03em] text-white">{domain}</div>
+              <a
+                href={siteUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/62 transition hover:border-white/20 hover:text-white"
+              >
+                <Download size={14} />
+                Open source website
+              </a>
+            </section>
+          </div>
+        </div>
       </main>
     </div>
   );
