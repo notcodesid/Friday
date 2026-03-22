@@ -6,7 +6,7 @@ export const agentRegistry = [
   {
     id: "content-distribution",
     name: "Content Distribution Agent",
-    subtitle: "Turns a product website into a channel plan, draft copy, and publish-ready execution ideas.",
+    subtitle: "Turns a product website into a poster-led social package with reusable copy and campaign direction.",
     defaultGoal:
       "Find the most credible positioning angles and convert them into practical campaign output.",
   },
@@ -14,15 +14,15 @@ export const agentRegistry = [
     id: "cmo",
     name: "Friday CMO",
     subtitle:
-      "AI marketing operator — handles strategy, content direction, and publishing handoff.",
+      "AI marketing operator — handles strategy, content direction, and poster-plus-copy delivery.",
     defaultGoal:
-      "Understand marketing needs and coordinate specialist agents from research to OpenClock-ready output.",
+      "Understand marketing needs and coordinate specialist agents from research to reusable poster-and-copy output.",
   },
   {
     id: "content-strategist",
     name: "Content Strategist",
     subtitle:
-      "Creates blog posts, social media copy, email campaigns, competitor reads, and publish-ready social packages.",
+      "Creates blog posts, social media copy, email campaigns, competitor reads, and reusable social asset packages.",
     defaultGoal:
       "Produce research-backed, brand-aligned content that is ready to publish.",
   },

@@ -18,6 +18,32 @@ export async function fetchHtml(url: string): Promise<string> {
   return res.text();
 }
 
+export type FetchedImage = {
+  base64: string;
+  mimeType: string;
+};
+
+/**
+ * Fetch an image URL and return its base64-encoded data.
+ * Returns null if the fetch fails or the response isn't an image.
+ */
+export async function fetchImageAsBase64(url: string): Promise<FetchedImage | null> {
+  try {
+    const res = await fetch(url, { ...FETCH_OPTS, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) return null;
+    const buffer = await res.arrayBuffer();
+    // Skip images that are too small (likely tracking pixels) or too large (>4MB)
+    if (buffer.byteLength < 1000 || buffer.byteLength > 4 * 1024 * 1024) return null;
+    const base64 = Buffer.from(buffer).toString("base64");
+    const mimeType = contentType.split(";")[0].trim();
+    return { base64, mimeType };
+  } catch {
+    return null;
+  }
+}
+
 function cleanText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }

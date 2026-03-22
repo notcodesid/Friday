@@ -1,16 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { Session } from "@supabase/supabase-js";
+import { useRouter } from "next/navigation";
+import { OnboardingWizard } from "./onboarding-wizard";
+import { Workspace } from "./workspace";
+import { useAuth } from "@/lib/auth/auth-context";
 import {
   ArrowLeft,
+  Boxes,
+  Check,
   CheckCircle,
   Chrome,
   ChevronRight,
+  Copy,
+  Download,
   FileText,
+  Image,
   Loader2,
   LogOut,
   Mail,
+  Target,
+  Workflow,
   X,
 } from "lucide-react";
 
@@ -31,7 +41,7 @@ import type {
   CompetitiveInsights,
 } from "@/lib/agents/schemas";
 import type { FridayContext } from "@/lib/agents/core/context";
-import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import type { Session } from "@supabase/supabase-js";
 
 type BrandMeta = {
   title: string;
@@ -43,6 +53,42 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+};
+
+type PosterAsset = {
+  eyebrow: string;
+  headline: string;
+  subheadline: string;
+  proofPoints: string[];
+  cta: string;
+  footer: string;
+};
+
+type AdFormat =
+  | "instagram-post"
+  | "instagram-story"
+  | "facebook-ad"
+  | "linkedin-banner"
+  | "x-post";
+
+const AD_FORMAT_OPTIONS: Array<{ value: AdFormat; label: string }> = [
+  { value: "instagram-post", label: "Instagram Post" },
+  { value: "instagram-story", label: "Instagram Story" },
+  { value: "facebook-ad", label: "Facebook Ad" },
+  { value: "linkedin-banner", label: "LinkedIn Banner" },
+  { value: "x-post", label: "X Post" },
+];
+
+type GeneratedAdImage = {
+  format: AdFormat;
+  mimeType: string;
+  imageBase64: string;
+  brandAssets?: {
+    brandName: string;
+    colors: string[];
+    fonts: string[];
+    logo: string | null;
+  };
 };
 
 function normalizeSiteUrl(value: string) {
@@ -295,8 +341,8 @@ function buildMarketingContext({
 
   const uniqueVoiceSignals = [...new Set(voiceSignals)].slice(0, 6);
   const notes = [
-    "Default publishing workflow uses OpenClock.",
-    "Primary social channel is LinkedIn unless the operator asks for another platform.",
+    "Primary content workflow is a poster graphic plus social copy package.",
+    "Default publishing flow assumes manual copy-paste into Instagram, X, and design tools like Illustrator.",
     brandVoiceDoc?.identity ? `Voice identity: ${brandVoiceDoc.identity}` : undefined,
     insights?.positioningAdvice
       ? `Positioning advice: ${insights.positioningAdvice}`
@@ -312,11 +358,11 @@ function buildMarketingContext({
     siteUrl: siteUrl ?? undefined,
     brandVoice: uniqueVoiceSignals,
     campaignGoal:
-      "Turn research into publish-ready social content and OpenClock upload handoff.",
+      "Turn research into a reusable poster asset and sharp social ad copy.",
     competitors: competitors.map((competitor) => competitor.domain),
     brandTheme: "Marketing operator",
-    preferredChannels: ["LinkedIn", "X"],
-    publishingTool: "OpenClock",
+    preferredChannels: ["Instagram", "X"],
+    publishingTool: "Manual social distribution",
     notes,
   };
 }
@@ -467,9 +513,7 @@ function useAnalysisPipeline({
 
 /* ------------------------------------------------------------------ */
 
-export type DashboardProps = {
-  authEnabled: boolean;
-};
+export type DashboardProps = Record<string, never>;
 
 const DEFAULT_TERMINAL_SESSION_NAME = "Friday";
 
@@ -480,6 +524,210 @@ function truncateText(value: string, maxLength: number) {
   }
 
   return `${trimmed.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function trimSentence(value: string, maxLength: number) {
+  return truncateText(value.replace(/\s+/g, " ").replace(/[.?!]+$/, ""), maxLength);
+}
+
+function wrapPosterText(value: string, maxChars: number, maxLines: number) {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (candidate.length <= maxChars) {
+      currentLine = candidate;
+      continue;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      lines.push(word.slice(0, maxChars));
+      currentLine = word.slice(maxChars);
+    }
+
+    if (lines.length === maxLines) {
+      return [
+        ...lines.slice(0, maxLines - 1),
+        truncateText([currentLine, ...words.slice(index + 1)].join(" "), maxChars),
+      ];
+    }
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+
+  return [
+    ...lines.slice(0, maxLines - 1),
+    truncateText(lines.slice(maxLines - 1).join(" "), maxChars),
+  ];
+}
+
+function escapeSvgText(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildPosterAsset({
+  brand,
+  insights,
+  productAnalysis,
+  siteUrl,
+  userPrompt,
+}: {
+  brand: BrandMeta;
+  insights: CompetitiveInsights | null;
+  productAnalysis: ProductAnalysis | null;
+  siteUrl: string | null;
+  userPrompt: string | null;
+}): PosterAsset {
+  const headlineSource =
+    productAnalysis?.differentiators[0] ??
+    insights?.positioningAdvice ??
+    productAnalysis?.oneLiner ??
+    brand.description ??
+    `${brand.title} campaign poster`;
+  const subheadlineSource =
+    productAnalysis?.positioning ??
+    productAnalysis?.oneLiner ??
+    brand.description ??
+    "Turn the strongest product angle into a social-ready poster.";
+  const audience = productAnalysis?.targetAudience[0];
+  const proofPoints = [
+    ...(productAnalysis?.differentiators ?? []),
+    ...(insights?.opportunities ?? []),
+    ...(productAnalysis?.painPoints ?? []),
+  ]
+    .map((item) => trimSentence(item, 34))
+    .filter(Boolean)
+    .filter((item, index, items) => items.indexOf(item) === index)
+    .slice(0, 3);
+
+  return {
+    eyebrow: trimSentence(
+      userPrompt || (audience ? `Built for ${audience}` : "Poster asset"),
+      34,
+    ),
+    headline: trimSentence(headlineSource, 56),
+    subheadline: trimSentence(subheadlineSource, 118),
+    proofPoints:
+      proofPoints.length > 0
+        ? proofPoints
+        : [
+            trimSentence(productAnalysis?.primaryCta || "Manual social package", 34),
+            "Instagram and X ready",
+          ],
+    cta: trimSentence(productAnalysis?.primaryCta || "See how it works", 28),
+    footer: trimSentence(
+      siteUrl ? getSiteDomain(siteUrl).replace(/^www\./, "") : brand.title,
+      30,
+    ),
+  };
+}
+
+function formatPosterText(asset: PosterAsset) {
+  return [
+    `Eyebrow: ${asset.eyebrow}`,
+    `Headline: ${asset.headline}`,
+    `Subheadline: ${asset.subheadline}`,
+    `Proof points: ${asset.proofPoints.join(" | ")}`,
+    `CTA: ${asset.cta}`,
+    `Footer: ${asset.footer}`,
+  ].join("\n");
+}
+
+function buildPosterSvg(asset: PosterAsset) {
+  const headlineLines = wrapPosterText(asset.headline, 16, 3);
+  const subheadlineLines = wrapPosterText(asset.subheadline, 34, 3);
+  const headlineTspans = headlineLines
+    .map((line, index) => {
+      const dy = index === 0 ? 0 : 88;
+      return `<tspan x="96" dy="${dy}">${escapeSvgText(line)}</tspan>`;
+    })
+    .join("");
+  const subheadlineTspans = subheadlineLines
+    .map((line, index) => {
+      const dy = index === 0 ? 0 : 40;
+      return `<tspan x="96" dy="${dy}">${escapeSvgText(line)}</tspan>`;
+    })
+    .join("");
+  const proofMarkup = asset.proofPoints
+    .slice(0, 3)
+    .map((point, index) => {
+      const y = 650 + index * 74;
+      return `
+        <rect x="96" y="${y}" width="420" height="52" rx="26" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.12)" />
+        <text x="122" y="${y + 33}" font-size="22" fill="#fef3c7" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">${escapeSvgText(point)}</text>
+      `;
+    })
+    .join("");
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080" role="img" aria-label="${escapeSvgText(asset.headline)}">
+      <defs>
+        <linearGradient id="poster-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#091a28" />
+          <stop offset="55%" stop-color="#102f43" />
+          <stop offset="100%" stop-color="#1b4d3e" />
+        </linearGradient>
+        <radialGradient id="poster-orb" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#fb923c" stop-opacity="0.9" />
+          <stop offset="100%" stop-color="#fb923c" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <rect width="1080" height="1080" fill="url(#poster-bg)" />
+      <circle cx="860" cy="180" r="240" fill="url(#poster-orb)" />
+      <circle cx="966" cy="948" r="188" fill="rgba(254,243,199,0.08)" />
+      <rect x="72" y="72" width="936" height="936" rx="48" fill="none" stroke="rgba(255,255,255,0.14)" />
+      <text x="96" y="150" font-size="24" letter-spacing="4" font-weight="700" fill="#fcd34d" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">${escapeSvgText(asset.eyebrow.toUpperCase())}</text>
+      <text x="96" y="272" font-size="82" font-weight="800" fill="#f8fafc" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">${headlineTspans}</text>
+      <text x="96" y="528" font-size="34" fill="#d7e6ee" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">${subheadlineTspans}</text>
+      ${proofMarkup}
+      <rect x="96" y="912" width="302" height="74" rx="37" fill="#f97316" />
+      <text x="128" y="958" font-size="30" font-weight="700" fill="#fff7ed" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">${escapeSvgText(asset.cta)}</text>
+      <text x="760" y="954" font-size="24" letter-spacing="3" font-weight="700" fill="#d7e6ee" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">${escapeSvgText(asset.footer.toUpperCase())}</text>
+      <text x="984" y="954" font-size="24" fill="#fef3c7" text-anchor="end" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">POSTER</text>
+    </svg>
+  `.trim();
+}
+
+async function copyText(value: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard is not available.");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
 
@@ -551,7 +799,6 @@ function AuthControl({
   if (!authEnabled) {
     return (
       <div className="user-badge user-badge-static">
-        <div className="user-avatar text-xs">FR</div>
         <div className="auth-pill-copy">
           <span>Preview mode</span>
         </div>
@@ -575,9 +822,9 @@ function AuthControl({
   if (!session) {
     return (
       <button type="button" className="user-badge" onClick={onOpenAuth}>
-        <div className="user-avatar text-xs">IN</div>
+        <div className="user-avatar ">IN</div>
         <div className="auth-pill-copy">
-          <span>Sign in</span>
+          <span className="text-xs">Sign in</span>
         </div>
       </button>
     );
@@ -724,22 +971,37 @@ function AuthModal({
   );
 }
 
-export function Dashboard({ authEnabled }: DashboardProps) {
+export function Dashboard() {
+  const router = useRouter();
+  const {
+    authEnabled,
+    session,
+    isAuthLoading,
+    isLocked,
+    canLoadWorkspace,
+    authError: contextAuthError,
+    isAuthModalOpen,
+    authEmail,
+    linkSentTo,
+    isSendingLink,
+    isGoogleLoading,
+    openAuthModal,
+    closeAuthModal,
+    setAuthEmail,
+    setAuthError: setContextAuthError,
+    handleSendMagicLink,
+    handleGoogleSignIn,
+    handleSignOut,
+  } = useAuth();
+
+  const [wizardComplete, setWizardComplete] = useState(false);
   const [terminalInput, setTerminalInput] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [currentSiteUrl, setCurrentSiteUrl] = useState<string | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [authLoadingState, setAuthLoadingState] = useState(authEnabled);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAuthMenuOpen, setIsAuthMenuOpen] = useState(false);
-  const [authEmail, setAuthEmail] = useState("");
-  const [authError, setAuthError] = useState<string | null>(null);
   const [terminalError, setTerminalError] = useState<string | null>(null);
-  const [linkSentTo, setLinkSentTo] = useState<string | null>(null);
-  const [isSendingLink, setIsSendingLink] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [competitors, setCompetitors] = useState<CompetitorRecord[]>([]);
   const [competitorInput, setCompetitorInput] = useState("");
   const [competitorError, setCompetitorError] = useState<string | null>(null);
@@ -748,7 +1010,14 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   const [isBrandVoiceLoading, setIsBrandVoiceLoading] = useState(false);
   const [brandVoiceError, setBrandVoiceError] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<ViewType>("home");
+  const [selectedAdFormat, setSelectedAdFormat] = useState<AdFormat>("instagram-post");
+  const [generatedAds, setGeneratedAds] = useState<GeneratedAdImage[]>([]);
+  const [isGeneratingAd, setIsGeneratingAd] = useState(false);
+  const [adError, setAdError] = useState<string | null>(null);
+  const [adPrompt, setAdPrompt] = useState("");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const isSiteLoaded = Boolean(currentSiteUrl);
+  const singlePageWorkflow = true;
   const brand = useBrandMeta(currentSiteUrl);
   const attemptedDiscoveryRef = useRef(false);
 
@@ -757,15 +1026,73 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     authRequired: authEnabled,
   });
 
+  // Redirect to landing if not authenticated
+  useEffect(() => {
+    if (authEnabled && !isAuthLoading && !session) {
+      router.replace("/");
+    }
+  }, [authEnabled, isAuthLoading, session, router]);
+
   const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
   const workspaceDomain = currentDomain.replace(/^www\./, "");
   const workspaceTitle =
     brand.title && brand.title !== "Website" ? brand.title : workspaceDomain || "Workspace";
+  const displayName = getDisplayName(session);
+  const avatarUrl = getAvatarUrl(session);
+  const userInitials = getInitials(displayName);
+  const latestAssistantMessage =
+    [...chatMessages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.content.trim()) ?? null;
+  const latestUserMessage =
+    [...chatMessages].reverse().find((message) => message.role === "user") ?? null;
+  const posterAsset = buildPosterAsset({
+    brand,
+    insights: analysis.insights,
+    productAnalysis: analysis.productAnalysis,
+    siteUrl: currentSiteUrl,
+    userPrompt: latestUserMessage?.content ?? null,
+  });
+  const posterText = formatPosterText(posterAsset);
+  const posterSvg = buildPosterSvg(posterAsset);
+  const posterPreviewSrc = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(posterSvg)}`;
   const insightCount = analysis.insights
     ? analysis.insights.opportunities.length +
       analysis.insights.gaps.length +
       analysis.insights.recommendations.length
     : 0;
+  const workflowOverview = [
+    {
+      label: "Website",
+      value: workspaceDomain || "Loaded",
+      note: "Source imported into the workspace",
+    },
+    {
+      label: "Marketing",
+      value: chatMessages.length > 0 ? `${chatMessages.length} prompts` : "Ready",
+      note: "AI operator for content creation",
+    },
+    {
+      label: "Research",
+      value: analysis.productAnalysis ? "Ready" : analysis.isRunning ? "Running" : "Pending",
+      note: "Positioning, audience, and differentiators",
+    },
+    {
+      label: "Competitors",
+      value: competitors.length > 0 ? `${competitors.length} tracked` : "Pending",
+      note: "Market landscape and comparison",
+    },
+    {
+      label: "Voice",
+      value: brandVoiceDoc ? "Ready" : isBrandVoiceLoading ? "Drafting" : "Pending",
+      note: "Tone rules and rewrite guidance",
+    },
+    {
+      label: "Strategy",
+      value: insightCount > 0 ? `${insightCount} notes` : "Pending",
+      note: "Campaign angles and next moves",
+    },
+  ];
   const outlineItems: Array<{
     view: ViewType;
     label: string;
@@ -814,62 +1141,90 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     { step: 3, label: "Competitor Analysis" },
     { step: 4, label: "Strategic Insights" },
   ];
-  const landingSections = [
-    {
-      label: "Marketing Console",
-      note: "Research-backed social posts and OpenClock handoff",
-      tag: "Primary",
-    },
-    {
-      label: "Company Report",
-      note: "Overview, domain, and workspace status",
-      tag: "Overview",
-    },
-    {
-      label: "Product Information",
-      note: "Positioning, audience, and differentiators",
-      tag: "Product",
-    },
-    {
-      label: "Competitor Analysis",
-      note: "Tracked brands and comparison notes",
-      tag: "Landscape",
-    },
-    {
-      label: "Brand Voice",
-      note: "Messaging rules, tone, and examples",
-      tag: "Messaging",
-    },
-    {
-      label: "Strategic Insights",
-      note: "Opportunities, gaps, and next moves",
-      tag: "Strategy",
-    },
-  ];
-  const [featuredLandingSection, ...supportingLandingSections] = landingSections;
   const landingExamples = [
     "https://linear.app",
     "https://www.notion.so",
     "https://www.reddit.com",
   ];
+  const dashboardEntrySections = [
+    {
+      title: "Company Report",
+      copy:
+        "A structured company read with product positioning, key signals, and the working summary that anchors the rest of the dashboard.",
+    },
+    {
+      title: "Competitor Analysis",
+      copy:
+        "Direct competitor discovery, comparison notes, and market framing so the research is grounded in the actual landscape.",
+    },
+    {
+      title: "Brand Voice",
+      copy:
+        "Voice principles, messaging direction, and reusable language guidance that feeds the later creative work.",
+    },
+    {
+      title: "Strategic Insights",
+      copy:
+        "Campaign angles, gaps, and next actions pulled together after the product and competitor reads are complete.",
+    },
+  ];
+  const dashboardEntryWorkflow = [
+    {
+      title: "Authenticate",
+      note: "Friday keeps the workspace protected until the session is valid.",
+    },
+    {
+      title: "Paste the company URL",
+      note: "One URL is enough to start the product, competitor, and messaging pipeline.",
+    },
+    {
+      title: "Open the full dashboard",
+      note: "The report fills in with research and the operating tools you need next.",
+    },
+  ];
   const marketingPromptSuggestions = [
-    `Create a LinkedIn launch post for ${brand.title} and package it for OpenClock upload.`,
-    `Turn ${brand.title}'s positioning into a 3-post LinkedIn series with OpenClock-ready handoff.`,
-    `Write a founder-style social post for ${brand.title} based on the strongest competitive angle.`,
+    `Create a square poster headline and caption for ${brand.title}.`,
+    `Write the Instagram caption and X post that go with a ${brand.title} launch graphic.`,
+    `Turn ${brand.title}'s strongest competitive angle into a poster and ad copy package.`,
   ];
 
   const terminalInputRef = useRef<HTMLInputElement>(null);
   const authMenuRef = useRef<HTMLDivElement>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
 
-  const openAuthModal = useCallback(() => {
-    setIsAuthMenuOpen(false);
-    setIsAuthModalOpen(true);
+  const handleCopyAction = useCallback(async (key: string, value: string) => {
+    try {
+      await copyText(value);
+      setCopiedKey(key);
+      setTerminalError(null);
+      window.setTimeout(() => {
+        setCopiedKey((current) => (current === key ? null : current));
+      }, 1800);
+    } catch (error) {
+      setTerminalError(
+        error instanceof Error ? error.message : "Could not copy to the clipboard.",
+      );
+    }
   }, []);
 
-  const closeAuthModal = useCallback(() => {
-    setIsAuthModalOpen(false);
-  }, []);
+  const handleDownloadPoster = useCallback(() => {
+    try {
+      const blob = new Blob([posterSvg], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${workspaceTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "poster"}-poster.svg`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      setTerminalError(null);
+    } catch (error) {
+      setTerminalError(
+        error instanceof Error ? error.message : "Could not download the poster graphic.",
+      );
+    }
+  }, [posterSvg, workspaceTitle]);
 
   const runMarketingPrompt = useCallback(
     async (rawPrompt: string) => {
@@ -992,18 +1347,70 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     }
   }, [currentSiteUrl, isBrandVoiceLoading]);
 
-  const browserAuthClient = authEnabled ? getSupabaseBrowserClient() : null;
+  const generateBrandAd = useCallback(async () => {
+    if (!currentSiteUrl || isGeneratingAd) return;
+    setIsGeneratingAd(true);
+    setAdError(null);
+    try {
+      const res = await fetch("/api/brand-ads", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token
+            ? { Authorization: `Bearer ${session.access_token}` }
+            : {}),
+        },
+        body: JSON.stringify({
+          siteUrl: currentSiteUrl,
+          format: selectedAdFormat,
+          prompt: adPrompt.trim() || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(data.error ?? "Request failed");
+      }
+
+      const data = (await res.json()) as GeneratedAdImage;
+      setGeneratedAds((prev) => [data, ...prev]);
+      setAdPrompt("");
+    } catch (err) {
+      setAdError(err instanceof Error ? err.message : "Failed to generate ad");
+    } finally {
+      setIsGeneratingAd(false);
+    }
+  }, [currentSiteUrl, isGeneratingAd, selectedAdFormat, adPrompt, session?.access_token]);
+
   const terminalSessionName = currentSiteUrl
     ? truncateText(currentSiteUrl, 48)
     : DEFAULT_TERMINAL_SESSION_NAME;
-  const authSetupError =
-    authEnabled && !browserAuthClient
-      ? "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are required for authentication."
-      : null;
-  const isAuthLoading =
-    authEnabled && Boolean(browserAuthClient) ? authLoadingState : false;
-  const isLocked = authEnabled && !isAuthLoading && !session?.access_token;
-  const visibleAuthError = authError ?? authSetupError ?? terminalError;
+  const showWorkspaceEntry = !isSiteLoaded;
+  const visibleAuthError = contextAuthError ?? terminalError;
+  const dashboardEntryFacts = [
+    {
+      label: "Access",
+      value: canLoadWorkspace ? "Authenticated" : "Sign in required",
+      note: canLoadWorkspace
+        ? "The dashboard is unlocked and ready for a company URL."
+        : "Authentication happens first, then the URL input unlocks.",
+    },
+    {
+      label: "Input",
+      value: canLoadWorkspace ? "URL field ready" : "Locked until auth",
+      note: "Paste one company website and Friday builds the full workspace from it.",
+    },
+    {
+      label: "Output",
+      value: "Research + assets",
+      note: "Company report, competitors, brand voice, strategy, and creative output.",
+    },
+    {
+      label: "View",
+      value: "One dashboard",
+      note: "Everything opens inside the same operating view instead of separate landing flows.",
+    },
+  ];
   const terminalStatus = isAuthLoading
     ? "Checking session"
     : isLocked
@@ -1103,63 +1510,24 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   ]);
 
   useEffect(() => {
-    if (!authEnabled) {
-      return;
-    }
-
-    const supabase = browserAuthClient;
-    if (!supabase) {
-      return;
-    }
-
-    let active = true;
-
-    void supabase.auth.getSession().then(({ data, error }) => {
-      if (!active) {
-        return;
-      }
-
-      if (error) {
-        setAuthError(error.message);
-      }
-
-      setSession(data.session ?? null);
-      setAuthLoadingState(false);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (!active) {
-        return;
-      }
-
-      setSession(nextSession ?? null);
-      setAuthLoadingState(false);
-
-      if (nextSession) {
-        setAuthError(null);
-        setAuthEmail("");
-        setLinkSentTo(null);
-        setIsAuthModalOpen(false);
-      }
-    });
-
-    return () => {
-      active = false;
-      subscription.unsubscribe();
-    };
-  }, [authEnabled, browserAuthClient]);
-
-  useEffect(() => {
     setBrandVoiceDoc(null);
     setBrandVoiceError(null);
     setIsBrandVoiceLoading(false);
     setChatMessages([]);
     setChatInput("");
     setIsChatLoading(false);
+    setCopiedKey(null);
     setCurrentView("home");
+    setGeneratedAds([]);
+    setAdError(null);
+    setAdPrompt("");
   }, [currentSiteUrl]);
+
+  useEffect(() => {
+    if (!isSiteLoaded) {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    }
+  }, [isSiteLoaded]);
 
   useEffect(() => {
     const container = chatMessagesRef.current;
@@ -1195,7 +1563,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
       }
 
       setIsAuthMenuOpen(false);
-      setIsAuthModalOpen(false);
+      closeAuthModal();
     }
 
     document.addEventListener("mousedown", handleDocumentClick);
@@ -1266,93 +1634,6 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     attemptedDiscoveryRef.current = false;
     setCompetitors([]);
     setCompetitorError(null);
-  }
-
-  async function handleSendMagicLink(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setAuthError(null);
-
-    const email = authEmail.trim();
-    if (!email) {
-      setAuthError("Enter an email address to continue.");
-      return;
-    }
-
-    const supabase = browserAuthClient;
-    if (!supabase) {
-      setAuthError(
-        "Supabase auth is not available in the browser. Check your public auth env vars.",
-      );
-      return;
-    }
-
-    setIsSendingLink(true);
-
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: window.location.origin,
-        shouldCreateUser: true,
-      },
-    });
-
-    if (error) {
-      setAuthError(error.message);
-      setIsSendingLink(false);
-      return;
-    }
-
-    setLinkSentTo(email);
-    setAuthEmail("");
-    setIsSendingLink(false);
-  }
-
-  async function handleGoogleSignIn() {
-    setAuthError(null);
-
-    const supabase = browserAuthClient;
-    if (!supabase) {
-      setAuthError(
-        "Supabase auth is not available in the browser. Check your public auth env vars.",
-      );
-      return;
-    }
-
-    setIsGoogleLoading(true);
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: window.location.origin,
-      },
-    });
-
-    if (error) {
-      setAuthError(error.message);
-      setIsGoogleLoading(false);
-    }
-  }
-
-  async function handleSignOut() {
-    const supabase = browserAuthClient;
-    if (!supabase) {
-      setAuthError(
-        "Supabase auth is not available in the browser. Check your public auth env vars.",
-      );
-      return;
-    }
-
-    setAuthError(null);
-    setIsAuthMenuOpen(false);
-
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      setAuthError(error.message);
-      return;
-    }
-
-    setSession(null);
-    setIsAuthModalOpen(true);
   }
 
   function renderSidebar() {
@@ -1450,6 +1731,52 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     );
   }
 
+  if (!wizardComplete && (showWorkspaceEntry || analysis.isRunning)) {
+    return (
+      <OnboardingWizard
+        isAnalysisRunning={analysis.isRunning}
+        terminalInput={terminalInput}
+        visibleAuthError={visibleAuthError}
+        terminalInputRef={terminalInputRef}
+        onInputChange={(value) => {
+          setTerminalInput(value);
+          setTerminalError(null);
+        }}
+        onSubmit={handleTerminalSubmit}
+        landingExamples={landingExamples}
+        analysisCurrentStep={analysis.currentStep}
+        stepLabel={analysis.stepLabel ?? ""}
+        productAnalysis={analysis.productAnalysis}
+        analysisErrors={analysis.errors}
+        onComplete={() => setWizardComplete(true)}
+      />
+    );
+  }
+
+  // New workspace view after wizard completes
+  if (wizardComplete && currentSiteUrl && analysis.productAnalysis) {
+    return (
+      <Workspace
+        siteUrl={currentSiteUrl}
+        productAnalysis={analysis.productAnalysis}
+        competitors={competitors}
+        competitorAnalyses={analysis.competitorAnalyses}
+        insights={analysis.insights}
+        brandVoiceDoc={brandVoiceDoc}
+        brandContext={{
+          brandName: analysis.productAnalysis.brandName,
+          oneLiner: analysis.productAnalysis.oneLiner,
+          targetAudience: analysis.productAnalysis.targetAudience.join(", "),
+          siteUrl: currentSiteUrl,
+          brandVoice: [
+            ...(analysis.productAnalysis.brandVoice ?? []),
+          ],
+          competitors: competitors.map((c) => c.domain),
+        }}
+      />
+    );
+  }
+
   return (
     <div className="dashboard-container">
       <div className="dashboard-header">
@@ -1458,7 +1785,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
           <div className="dashboard-brand-copy">
             <div className="dashboard-brand-name">Friday</div>
             <div className="dashboard-brand-subtitle">
-              Research, write, and package social content
+              Research, poster assets, and social copy
             </div>
           </div>
         </div>
@@ -1476,199 +1803,27 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       </div>
 
-      {!isSiteLoaded && (
-        <div className="landing-shell">
-          <div className="landing-grid">
-            <section className="card landing-story-card">
-              <div className="card-body landing-story-body">
-                <div className="section-kicker">Homepage</div>
-                <h1 className="landing-title">From website to marketing engine.</h1>
-                <p className="landing-lead">
-                  Friday turns one company URL into a marketing workspace. It
-                  organizes research, positioning, competitors, voice, and a
-                  dedicated console for generating LinkedIn-ready posts with
-                  OpenClock upload handoff.
-                </p>
-
-                <div className="landing-structure">
-                  <div className="landing-structure-header">
-                    <div>
-                      <div className="landing-structure-title">Workspace sections</div>
-                      <div className="landing-structure-note">
-                        One clear homepage, then dedicated pages for the deeper work.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="landing-feature-card">
-                    <div className="landing-feature-icon">
-                      <FileText className="icon" />
-                    </div>
-                    <div className="landing-feature-copy">
-                      <div className="landing-feature-topline">
-                        <span className="landing-feature-badge">
-                          {featuredLandingSection.tag}
-                        </span>
-                        <span className="landing-feature-title">
-                          {featuredLandingSection.label}
-                        </span>
-                      </div>
-                      <div className="landing-feature-note">
-                        {featuredLandingSection.note}
-                      </div>
-                    </div>
-                    <ChevronRight
-                      style={{ width: 18, height: 18, color: "var(--accent-strong)" }}
-                    />
-                  </div>
-
-                  <div className="landing-section-grid">
-                    {supportingLandingSections.map((section, index) => (
-                      <div key={section.label} className="landing-section-card">
-                        <div className="landing-section-top">
-                          <span className="landing-section-index">
-                            {String(index + 2).padStart(2, "0")}
-                          </span>
-                          <span className="landing-section-tag">{section.tag}</span>
-                        </div>
-                        <div className="landing-section-title">{section.label}</div>
-                        <div className="landing-section-note">{section.note}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="card landing-input-card">
-              <div className="card-body landing-input-body">
-                <div className="section-kicker">Start Here</div>
-                <div className="landing-panel-title">Paste a company website</div>
-                <p className="landing-panel-copy">
-                  Friday will build the workspace, map the brand context, and
-                  give you a marketing console for content creation and publishing
-                  handoff.
-                </p>
-
-                {isLocked && (
-                  <div className="auth-lock-panel">
-                    <div className="auth-lock-copy">
-                      <div className="auth-lock-title">Authentication required</div>
-                      <div className="auth-lock-text">
-                        Sign in with your email to unlock analysis tools and
-                        protected API access.
-                      </div>
-                    </div>
-                    <button type="button" className="auth-primary-btn" onClick={openAuthModal}>
-                      Sign in
-                    </button>
-                  </div>
-                )}
-
-                {visibleAuthError && <div className="auth-inline-error">{visibleAuthError}</div>}
-
-                <form onSubmit={handleTerminalSubmit} className="landing-form">
-                  <label className="landing-field-label" htmlFor="site-url-input">
-                    Website URL
-                  </label>
-                  <div className="workspace-input-shell workspace-input-shell-large">
-                    <div className="workspace-input-prefix">
-                      {analysis.isRunning ? (
-                        <span className="terminal-cursor" />
-                      ) : (
-                        <span>&gt;</span>
-                      )}
-                    </div>
-                    <input
-                      id="site-url-input"
-                      ref={terminalInputRef}
-                      type="text"
-                      value={terminalInput}
-                      onChange={(event) => {
-                        if (!isLocked) {
-                          setTerminalInput(event.target.value);
-                          setTerminalError(null);
-                        }
-                      }}
-                      onFocus={() => {
-                        if (isLocked) {
-                          openAuthModal();
-                        }
-                      }}
-                      disabled={isAuthLoading}
-                      readOnly={isLocked}
-                      placeholder={
-                        isAuthLoading
-                          ? "Checking your session..."
-                          : isLocked
-                            ? "Sign in to start a protected session..."
-                            : analysis.isRunning
-                              ? "Analyzing website..."
-                              : "https://company.com"
-                      }
-                      className="workspace-input"
-                      autoFocus={!authEnabled}
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    className="auth-primary-btn landing-submit-button"
-                    disabled={isAuthLoading || analysis.isRunning}
-                  >
-                    {analysis.isRunning ? "Analyzing..." : "Open workspace"}
-                  </button>
-                </form>
-
-                <div className="landing-example-block">
-                  <div className="landing-example-label">Try an example</div>
-                  <div className="landing-example-list">
-                    {landingExamples.map((example) => (
-                      <button
-                        key={example}
-                        type="button"
-                        className="landing-example-chip"
-                        onClick={() => {
-                          if (isLocked) {
-                            openAuthModal();
-                            return;
-                          }
-                          setTerminalInput(example);
-                          setTerminalError(null);
-                          terminalInputRef.current?.focus();
-                        }}
-                      >
-                        {example.replace(/^https?:\/\//, "")}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="landing-status-line">
-                  <span className="landing-status-label">Status</span>
-                  <span>{terminalStatus}</span>
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
-      )}
-
       {isSiteLoaded && (
         <div className="workspace-bar card">
           <div className="card-body workspace-bar-body">
             <div className="workspace-bar-copy">
-              <div className="section-kicker">Current Workspace</div>
-              <div className="workspace-bar-title">{workspaceTitle}</div>
+              <div className="workspace-bar-label">Loaded website</div>
+              <div className="workspace-bar-title-row">
+                <div className="workspace-bar-title">{workspaceTitle}</div>
+                {workspaceDomain && <span className="status-chip">{workspaceDomain}</span>}
+              </div>
               <p className="workspace-bar-text">{currentSiteUrl}</p>
             </div>
 
             <div className="workspace-bar-summary">
               <div className="workspace-bar-badges">
                 <span className="status-chip status-chip-accent">{terminalStatus}</span>
-                {workspaceDomain && <span className="status-chip">{workspaceDomain}</span>}
                 {analysis.currentStep > 0 && analysis.currentStep <= 4 && (
                   <span className="status-chip">Step {analysis.currentStep} of 4</span>
                 )}
+                <span className="status-chip">
+                  {analysis.isRunning ? "Analysis running" : "Dashboard ready"}
+                </span>
               </div>
 
               {isLocked && (
@@ -1692,7 +1847,845 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "home" && (
+      {isSiteLoaded && singlePageWorkflow && (
+        <div className="report-shell">
+          <section className="card report-hero">
+            <div className="card-body report-hero-grid">
+              <div className="report-hero-copy">
+                <div className="section-kicker">One-Page Workflow</div>
+                <div className="report-brand-row">
+                  <div className="report-brand-mark">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={brand.favicon}
+                      alt={brand.title}
+                      className="report-brand-mark-image"
+                    />
+                  </div>
+                  <div>
+                    <h1 className="report-title">{workspaceTitle}</h1>
+                    <p className="report-lead">
+                      {brand.description ||
+                        "Friday is now organized as a single SaaS operating page for research, messaging, and content execution."}
+                    </p>
+                  </div>
+                </div>
+                <div className="report-meta-row">
+                  <span className="status-chip status-chip-accent">SaaS workflow</span>
+                  <span className="status-chip">
+                    {analysis.isRunning ? analysis.stepLabel : "Operating view ready"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="report-metrics">
+                <div className="metric-card">
+                  <div className="metric-label">Operator</div>
+                  <div className="metric-value">
+                    {chatMessages.length > 0 ? `${chatMessages.length}` : "Ready"}
+                  </div>
+                  <div className="metric-note">Marketing console prompts</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Research</div>
+                  <div className="metric-value">
+                    {analysis.productAnalysis ? "Ready" : analysis.isRunning ? "Running" : "Pending"}
+                  </div>
+                  <div className="metric-note">Positioning summary</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Voice</div>
+                  <div className="metric-value">
+                    {brandVoiceDoc ? "Ready" : isBrandVoiceLoading ? "Drafting" : "Pending"}
+                  </div>
+                  <div className="metric-note">Brand guidance</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Insights</div>
+                  <div className="metric-value">{insightCount}</div>
+                  <div className="metric-note">Campaign notes</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="card report-section">
+            <div className="card-header">
+              <div className="section-heading">
+                <div className="section-kicker">Workflow</div>
+                <span>Everything in one operating page</span>
+              </div>
+            </div>
+            <div className="card-body">
+              <div className="report-fact-grid" style={{ marginTop: 0 }}>
+                {workflowOverview.map((item) => (
+                  <div key={item.label} className="fact-card">
+                    <span className="fact-label">{item.label}</span>
+                    <span className="fact-value">{item.value}</span>
+                    <div className="text-xs text-muted" style={{ marginTop: 8, lineHeight: 1.6 }}>
+                      {item.note}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="card report-section">
+            <div className="card-header">
+              <div className="section-heading">
+                <div className="section-kicker">Asset</div>
+                <span>Poster graphic and copy handoff</span>
+              </div>
+            </div>
+            <div className="card-body poster-studio-grid">
+              <div className="poster-preview-shell">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={posterPreviewSrc}
+                  alt={`${workspaceTitle} poster preview`}
+                  className="poster-preview-image"
+                />
+              </div>
+
+              <div className="poster-studio-sidebar">
+                <div className="report-summary-block">
+                  <div className="font-semibold text-sm">Poster copy</div>
+                  <div className="poster-copy-stack">
+                    <div>
+                      <div className="poster-copy-label">Headline</div>
+                      <div className="poster-copy-value">{posterAsset.headline}</div>
+                    </div>
+                    <div>
+                      <div className="poster-copy-label">Support line</div>
+                      <div className="poster-copy-value poster-copy-muted">
+                        {posterAsset.subheadline}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="poster-copy-label">CTA</div>
+                      <div className="poster-copy-value">{posterAsset.cta}</div>
+                    </div>
+                  </div>
+
+                  <div className="poster-proof-list">
+                    {posterAsset.proofPoints.map((point) => (
+                      <span key={point} className="analysis-tag">
+                        {point}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="poster-action-row">
+                  <button
+                    type="button"
+                    className="secondary-inline-button"
+                    onClick={() => void handleCopyAction("poster-text", posterText)}
+                  >
+                    {copiedKey === "poster-text" ? (
+                      <>
+                        <Check style={{ width: 14, height: 14 }} />
+                        <span>Copied poster text</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy style={{ width: 14, height: 14 }} />
+                        <span>Copy poster text</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="primary-inline-button"
+                    onClick={handleDownloadPoster}
+                  >
+                    <Download style={{ width: 14, height: 14 }} />
+                    <span>Download SVG</span>
+                  </button>
+                </div>
+
+                <div className="poster-footnote">
+                  The poster downloads as an SVG so it can be reused directly or opened in
+                  Illustrator before posting to Instagram or X.
+                </div>
+
+                <div className="report-summary-block">
+                  <div className="poster-copy-header">
+                    <div className="font-semibold text-sm">Latest ad copy</div>
+                    {latestAssistantMessage && (
+                      <button
+                        type="button"
+                        className="secondary-inline-button"
+                        onClick={() =>
+                          void handleCopyAction("latest-ad", latestAssistantMessage.content)
+                        }
+                      >
+                        {copiedKey === "latest-ad" ? (
+                          <>
+                            <Check style={{ width: 14, height: 14 }} />
+                            <span>Copied ad</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy style={{ width: 14, height: 14 }} />
+                            <span>Copy ad</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
+                  {latestAssistantMessage ? (
+                    <div className="poster-copy-preview">{latestAssistantMessage.content}</div>
+                  ) : (
+                    <div className="poster-copy-preview poster-copy-placeholder">
+                      Run a prompt below to generate the caption, ad copy, or platform
+                      variants that go with this poster.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="card report-section">
+            <div className="card-header">
+              <div className="section-heading">
+                <div className="section-kicker">Brand Ads</div>
+                <span>AI-generated branded images</span>
+              </div>
+            </div>
+            <div className="card-body">
+              <div className="report-summary-block">
+                <div className="font-semibold text-sm">
+                  Generate branded ad images for social media
+                </div>
+                <div className="text-sm text-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
+                  Friday scrapes your website for brand colors, fonts, and imagery,
+                  then generates platform-ready ad creatives using AI.
+                </div>
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <div className="text-xs text-muted" style={{ marginBottom: 10 }}>
+                  Ad format
+                </div>
+                <div className="flex" style={{ flexWrap: "wrap", gap: 8 }}>
+                  {AD_FORMAT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className={`landing-example-chip${
+                        selectedAdFormat === opt.value ? " landing-example-chip-active" : ""
+                      }`}
+                      onClick={() => setSelectedAdFormat(opt.value)}
+                      disabled={isGeneratingAd}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginTop: 16 }}>
+                <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                  Custom direction (optional)
+                </div>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void generateBrandAd();
+                  }}
+                  style={{ display: "flex", gap: 8, alignItems: "stretch" }}
+                >
+                  <input
+                    type="text"
+                    className="report-input"
+                    placeholder="e.g. focus on product launch, use dark theme, highlight pricing..."
+                    value={adPrompt}
+                    onChange={(event) => setAdPrompt(event.target.value)}
+                    disabled={isGeneratingAd}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="submit"
+                    className="primary-inline-button"
+                    disabled={isGeneratingAd || !currentSiteUrl}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {isGeneratingAd ? (
+                      <>
+                        <Loader2 className="spin" style={{ width: 14, height: 14 }} />
+                        <span>Generating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Image style={{ width: 14, height: 14 }} />
+                        <span>Generate Ad</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+
+              {adError && (
+                <div className="report-error" style={{ marginTop: 14 }}>
+                  {adError}
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => void generateBrandAd()}
+                      className="secondary-inline-button"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {generatedAds.length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <div className="text-xs text-muted" style={{ marginBottom: 12 }}>
+                    Generated ads ({generatedAds.length})
+                  </div>
+                  <div className="brand-ads-grid">
+                    {generatedAds.map((ad, index) => {
+                      const imgSrc = `data:${ad.mimeType};base64,${ad.imageBase64}`;
+                      const formatLabel =
+                        AD_FORMAT_OPTIONS.find((o) => o.value === ad.format)?.label ?? ad.format;
+                      return (
+                        <div key={`${ad.format}-${index}`} className="brand-ad-card">
+                          <div className="brand-ad-preview">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={imgSrc}
+                              alt={`${formatLabel} ad`}
+                              className="brand-ad-image"
+                            />
+                          </div>
+                          <div className="brand-ad-meta">
+                            <span className="status-chip status-chip-accent">{formatLabel}</span>
+                            {ad.brandAssets?.colors && ad.brandAssets.colors.length > 0 && (
+                              <div className="brand-ad-colors">
+                                {ad.brandAssets.colors.slice(0, 5).map((color) => (
+                                  <span
+                                    key={color}
+                                    className="brand-ad-color-dot"
+                                    style={{ backgroundColor: color }}
+                                    title={color}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="brand-ad-actions">
+                            <button
+                              type="button"
+                              className="secondary-inline-button"
+                              onClick={() => {
+                                const link = document.createElement("a");
+                                link.href = imgSrc;
+                                link.download = `${workspaceTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${ad.format}.png`;
+                                document.body.appendChild(link);
+                                link.click();
+                                document.body.removeChild(link);
+                              }}
+                            >
+                              <Download style={{ width: 14, height: 14 }} />
+                              <span>Download</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {generatedAds.length === 0 && !adError && !isGeneratingAd && (
+                <div
+                  className="report-empty"
+                  style={{ marginTop: 18, textAlign: "center" }}
+                >
+                  <Image style={{ width: 24, height: 24, opacity: 0.4, margin: "0 auto 8px" }} />
+                  <div>No ads generated yet. Pick a format and hit Generate.</div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="card report-section">
+            <div className="card-header">
+              <div className="section-heading">
+                <div className="section-kicker">Operator</div>
+                <span>Marketing console</span>
+              </div>
+            </div>
+            <div className="card-body">
+              <div className="report-summary-block">
+                <div className="font-semibold text-sm">
+                  Create the ad copy that ships with the poster
+                </div>
+                <div className="text-sm text-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
+                  Ask Friday to write captions, launch copy, platform variants, or angle
+                  explorations without leaving the research workspace.
+                </div>
+                <div className="flex" style={{ flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                  <span className="status-chip status-chip-accent">Poster workflow</span>
+                  <span className="status-chip">
+                    {analysis.productAnalysis ? "Research attached" : "Basic brand context"}
+                  </span>
+                  <span className="status-chip">
+                    {brandVoiceDoc ? "Voice guide attached" : "Voice guide optional"}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <div className="text-xs text-muted" style={{ marginBottom: 10 }}>
+                  Quick prompts
+                </div>
+                <div className="landing-example-list">
+                  {marketingPromptSuggestions.map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      className="landing-example-chip"
+                      disabled={isChatLoading}
+                      onClick={() => handleChatSubmit(undefined, prompt)}
+                    >
+                      {truncateText(prompt, 72)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div
+              ref={chatMessagesRef}
+              className="chat-messages"
+              style={{
+                borderTop: "1px solid var(--border)",
+                minHeight: 320,
+                maxHeight: 620,
+              }}
+            >
+              {chatMessages.length === 0 ? (
+                <div className="chat-empty">
+                  <div className="text-sm font-semibold">No content requests yet</div>
+                  <div
+                    className="text-sm text-muted"
+                    style={{ marginTop: 8, maxWidth: 520, textAlign: "center", lineHeight: 1.7 }}
+                  >
+                    Start with a poster caption, an Instagram variant, or an X post.
+                    Friday will use the loaded research and return copy that matches
+                    the graphic above.
+                  </div>
+                </div>
+              ) : (
+                chatMessages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`chat-msg${
+                      message.role === "user" ? " chat-msg-user" : ""
+                    }`}
+                  >
+                    <div
+                      className={`chat-msg-avatar ${
+                        message.role === "user"
+                          ? "user-msg-avatar"
+                          : "assistant-msg-avatar"
+                      }`}
+                    >
+                      {message.role === "user" ? "U" : "FR"}
+                    </div>
+                    <div className="chat-msg-content">
+                      {message.role === "assistant" && message.content.trim() && (
+                        <div className="chat-msg-actions">
+                          <button
+                            type="button"
+                            className="secondary-inline-button chat-msg-action"
+                            onClick={() => void handleCopyAction(`message-${message.id}`, message.content)}
+                          >
+                            {copiedKey === `message-${message.id}` ? (
+                              <>
+                                <Check style={{ width: 14, height: 14 }} />
+                                <span>Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy style={{ width: 14, height: 14 }} />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
+                      <div className="chat-msg-text">{message.content}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+
+              {isChatLoading && (
+                <div className="chat-msg">
+                  <div className="chat-msg-avatar assistant-msg-avatar">FR</div>
+                  <div className="chat-msg-content">
+                    <div className="chat-typing text-sm text-muted">
+                      <Loader2 className="spin" style={{ width: 14, height: 14 }} />
+                      Drafting poster ad copy...
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <form className="chat-input-wrapper" onSubmit={handleChatSubmit}>
+              <input
+                type="text"
+                className="chat-input"
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                placeholder="Ask for a caption, an X post, or the copy that matches the poster..."
+                disabled={isChatLoading}
+              />
+              <button
+                type="submit"
+                className="chat-submit"
+                disabled={isChatLoading || !chatInput.trim()}
+                aria-label="Send prompt"
+              >
+                <ChevronRight style={{ width: 18, height: 18 }} />
+              </button>
+            </form>
+          </section>
+
+          <div className="report-preview-grid">
+            <section className="card report-section">
+              <div className="card-header">
+                <div className="section-heading">
+                  <div className="section-kicker">Product</div>
+                  <span>Positioning and audience</span>
+                </div>
+              </div>
+              <div className="card-body">
+                {!analysis.productAnalysis && (
+                  <div className="report-empty">
+                    {analysis.isRunning
+                      ? "Friday is still reading the product and extracting the positioning."
+                      : "No product analysis available yet. Load a site to generate it."}
+                  </div>
+                )}
+
+                {analysis.productAnalysis && (
+                  <>
+                    <div className="report-summary-block">
+                      <div className="font-semibold text-sm">
+                        {analysis.productAnalysis.brandName}
+                      </div>
+                      <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                        {analysis.productAnalysis.oneLiner}
+                      </div>
+                      <div
+                        className="text-sm"
+                        style={{ marginTop: 10, color: "var(--ink)", lineHeight: 1.7 }}
+                      >
+                        {analysis.productAnalysis.positioning}
+                      </div>
+                    </div>
+
+                    {analysis.productAnalysis.targetAudience.length > 0 && (
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                          Target Audience
+                        </div>
+                        <div className="flex" style={{ flexWrap: "wrap", gap: 6 }}>
+                          {analysis.productAnalysis.targetAudience.map((audience) => (
+                            <span key={audience} className="analysis-tag">{audience}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {analysis.productAnalysis.painPoints.length > 0 && (
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                          Pain Points Addressed
+                        </div>
+                        {analysis.productAnalysis.painPoints.map((painPoint) => (
+                          <div key={painPoint} className="analysis-list-item">{painPoint}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {analysis.productAnalysis.differentiators.length > 0 && (
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                          Differentiators
+                        </div>
+                        {analysis.productAnalysis.differentiators.map((differentiator) => (
+                          <div key={differentiator} className="analysis-list-item">
+                            {differentiator}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+
+            <section className="card report-section">
+              <div className="card-header">
+                <div className="section-heading">
+                  <div className="section-kicker">Landscape</div>
+                  <span>Competitors and comparisons</span>
+                </div>
+                {competitorError && (
+                  <button
+                    type="button"
+                    onClick={retryCompetitorDiscovery}
+                    className="secondary-inline-button"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+              <div className="card-body">
+                {isDiscoveringCompetitors && competitors.length === 0 && (
+                  <div className="flex items-center gap-2 text-muted text-sm" style={{ marginBottom: 10 }}>
+                    <Loader2 className="spin" style={{ width: 14, height: 14 }} />
+                    Fetching live competitor data...
+                  </div>
+                )}
+
+                {competitorError && <div className="report-error">{competitorError}</div>}
+
+                {!isDiscoveringCompetitors && competitors.length === 0 && !competitorError && (
+                  <div className="report-empty">
+                    No competitors loaded yet. Add a domain manually or let Friday
+                    discover them from the current site.
+                  </div>
+                )}
+
+                {competitors.length > 0 && (
+                  <div className="competitor-list">
+                    {competitors.map((competitor) => (
+                      <div key={competitor.domain} className="competitor-item">
+                        <div className="competitor-item-button">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={competitor.logo || getCompetitorLogo(competitor.domain)}
+                            alt={competitor.name}
+                            style={{ width: 18, height: 18, borderRadius: 4 }}
+                          />
+                          <div className="competitor-copy">
+                            <div className="competitor-copy-header">
+                              <span className="competitor-name">{competitor.name}</span>
+                              <span className="competitor-domain">{competitor.domain}</span>
+                            </div>
+                            <div className="competitor-reason">{competitor.reason}</div>
+                            {competitor.positioning && (
+                              <div className="competitor-positioning">
+                                {competitor.positioning}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="competitor-remove-btn"
+                          aria-label={`Remove ${competitor.domain}`}
+                          onClick={() => removeCompetitor(competitor.domain)}
+                        >
+                          <X style={{ width: 12, height: 12 }} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    addCompetitor(competitorInput);
+                    setCompetitorInput("");
+                  }}
+                  style={{ marginTop: 14 }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Add competitor domain or URL..."
+                    value={competitorInput}
+                    onChange={(event) => setCompetitorInput(event.target.value)}
+                    className="report-input"
+                  />
+                </form>
+
+                {analysis.competitorAnalyses.length > 0 && (
+                  <div style={{ marginTop: 18 }}>
+                    <div className="text-xs text-muted" style={{ marginBottom: 10 }}>
+                      Detailed competitor reads
+                    </div>
+                    {analysis.competitorAnalyses.map((competitorAnalysis) => (
+                      <div key={competitorAnalysis.domain} className="report-subcard">
+                        <div className="report-subcard-header">
+                          <div>
+                            <div className="font-semibold text-sm">{competitorAnalysis.name}</div>
+                            <div className="text-xs text-muted">{competitorAnalysis.domain}</div>
+                          </div>
+                        </div>
+                        <div className="text-sm" style={{ lineHeight: 1.7 }}>
+                          {competitorAnalysis.positioning}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+
+          <div className="report-preview-grid">
+            <section className="card report-section">
+              <div className="card-header">
+                <div className="section-heading">
+                  <div className="section-kicker">Messaging</div>
+                  <span>Brand voice</span>
+                </div>
+              </div>
+              <div className="card-body">
+                {!brandVoiceDoc && !isBrandVoiceLoading && !brandVoiceError && (
+                  <div className="report-empty">
+                    <div style={{ marginBottom: 14 }}>
+                      Generate a brand voice document based on the website content.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={generateBrandVoice}
+                      className="primary-inline-button"
+                    >
+                      Generate Brand Voice
+                    </button>
+                  </div>
+                )}
+
+                {isBrandVoiceLoading && (
+                  <div className="flex items-center gap-2 text-muted text-sm">
+                    <Loader2 className="spin" style={{ width: 16, height: 16 }} />
+                    Generating brand voice...
+                  </div>
+                )}
+
+                {brandVoiceError && (
+                  <div className="report-error">
+                    {brandVoiceError}
+                    <div style={{ marginTop: 12 }}>
+                      <button
+                        type="button"
+                        onClick={generateBrandVoice}
+                        className="secondary-inline-button"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {brandVoiceDoc && (
+                  <>
+                    <div className="report-quote-block">
+                      &ldquo;{brandVoiceDoc.identity}&rdquo;
+                    </div>
+
+                    <div style={{ marginTop: 18 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 8, fontWeight: 700 }}>
+                        Voice Principles
+                      </div>
+                      {brandVoiceDoc.principles.map((principle) => (
+                        <div key={principle.label} className="report-subcard">
+                          <div className="text-sm font-semibold">{principle.label}</div>
+                          <div className="text-sm text-muted" style={{ marginTop: 4, lineHeight: 1.7 }}>
+                            {principle.explanation}
+                          </div>
+                          <div className="report-example-block">{principle.example}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+
+            <section className="card report-section">
+              <div className="card-header">
+                <div className="section-heading">
+                  <div className="section-kicker">Strategy</div>
+                  <span>Campaign angles and next moves</span>
+                </div>
+              </div>
+              <div className="card-body">
+                {!analysis.insights && (
+                  <div className="report-empty">
+                    {analysis.isRunning
+                      ? "Friday is still pulling together the strategic takeaways."
+                      : "No strategic insights yet. They will appear here after the analysis finishes."}
+                  </div>
+                )}
+
+                {analysis.insights && (
+                  <>
+                    {analysis.insights.opportunities.length > 0 && (
+                      <div>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                          Opportunities
+                        </div>
+                        {analysis.insights.opportunities.map((opportunity) => (
+                          <div key={opportunity} className="analysis-list-item">{opportunity}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {analysis.insights.gaps.length > 0 && (
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                          Competitive Gaps
+                        </div>
+                        {analysis.insights.gaps.map((gap) => (
+                          <div key={gap} className="analysis-list-item">{gap}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {analysis.insights.recommendations.length > 0 && (
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                          Recommendations
+                        </div>
+                        {analysis.insights.recommendations.map((recommendation) => (
+                          <div key={recommendation} className="analysis-list-item">
+                            {recommendation}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {analysis.insights.positioningAdvice && (
+                      <div className="report-quote-block" style={{ marginTop: 18 }}>
+                        {analysis.insights.positioningAdvice}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && !singlePageWorkflow && currentView === "home" && (
         <div className="report-shell report-shell-home">
           <section className="card report-hero">
             <div className="card-body report-hero-grid">
@@ -1820,7 +2813,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                             160,
                           ) ||
                           "Open the console to continue the current content workflow."
-                        : "Generate LinkedIn posts, campaign angles, and OpenClock-ready upload packets from the current brand context."}
+                        : "Generate the poster copy, social captions, and campaign angles from the current brand context."}
                     </p>
                   </div>
                 </button>
@@ -1929,7 +2922,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "company-report" && (
+      {isSiteLoaded && !singlePageWorkflow && currentView === "company-report" && (
         <div className="report-shell">
           <div className="detail-page-layout">
             <div className="report-main">
@@ -2008,7 +3001,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "marketing-console" && (
+      {isSiteLoaded && !singlePageWorkflow && currentView === "marketing-console" && (
         <div className="report-shell">
           <div className="detail-page-layout">
             <div className="report-main">
@@ -2034,12 +3027,11 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                       Research-driven content execution for {brand.title}
                     </div>
                     <div className="text-sm text-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
-                      Ask Friday to draft social posts, messaging angles, campaign variants,
-                      or LinkedIn-ready copy. Responses are packaged for OpenClock/manual
-                      upload. Live publishing is not connected in this build.
+                      Ask Friday to draft poster copy, captions, messaging angles, or
+                      campaign variants. Live publishing is not connected in this build.
                     </div>
                     <div className="flex" style={{ flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-                      <span className="status-chip status-chip-accent">OpenClock handoff</span>
+                      <span className="status-chip status-chip-accent">Poster workflow</span>
                       <span className="status-chip">
                         {analysis.productAnalysis ? "Brand context loaded" : "Basic brand context"}
                       </span>
@@ -2085,9 +3077,9 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                         className="text-sm text-muted"
                         style={{ marginTop: 8, maxWidth: 520, textAlign: "center", lineHeight: 1.7 }}
                       >
-                        Start with a LinkedIn post, a short campaign sequence, or a
-                        founder-style announcement. Friday will use the loaded research
-                        and return a publish-ready package.
+                        Start with a poster caption, an Instagram variant, or an X post.
+                        Friday will use the loaded research and return a clean draft
+                        package.
                       </div>
                     </div>
                   ) : (
@@ -2120,7 +3112,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                       <div className="chat-msg-content">
                         <div className="chat-typing text-sm text-muted">
                           <Loader2 className="spin" style={{ width: 14, height: 14 }} />
-                          Building the content package...
+                          Drafting poster ad copy...
                         </div>
                       </div>
                     </div>
@@ -2133,7 +3125,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                     className="chat-input"
                     value={chatInput}
                     onChange={(event) => setChatInput(event.target.value)}
-                    placeholder="Ask for a LinkedIn post, a content series, or an OpenClock-ready handoff..."
+                    placeholder="Ask for a caption, an X post, or the copy that matches the poster..."
                     disabled={isChatLoading}
                   />
                   <button
@@ -2153,7 +3145,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "product-information" && (
+      {isSiteLoaded && !singlePageWorkflow && currentView === "product-information" && (
         <div className="report-shell">
           <div className="detail-page-layout">
             <div className="report-main">
@@ -2257,7 +3249,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "competitor-analysis" && (
+      {isSiteLoaded && !singlePageWorkflow && currentView === "competitor-analysis" && (
         <div className="report-shell">
           <div className="detail-page-layout">
             <div className="report-main">
@@ -2444,7 +3436,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "brand-voice" && (
+      {isSiteLoaded && !singlePageWorkflow && currentView === "brand-voice" && (
         <div className="report-shell">
           <div className="detail-page-layout">
             <div className="report-main">
@@ -2577,7 +3569,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       )}
 
-      {isSiteLoaded && currentView === "strategic-insights" && (
+      {isSiteLoaded && !singlePageWorkflow && currentView === "strategic-insights" && (
         <div className="report-shell">
           <div className="detail-page-layout">
             <div className="report-main">

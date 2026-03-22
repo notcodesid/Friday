@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 
 import "./globals.css";
+import { Providers } from "@/components/providers";
+import { hasSupabaseAuth } from "@/lib/env";
 
 export const metadata: Metadata = {
   title: "Friday | Marketing Operator",
   description:
-    "A marketing workspace for research, social content creation, and OpenClock-ready publishing handoff.",
+    "A marketing workspace for research, poster-led social content creation, and reusable copy handoff.",
 };
 
 export default function RootLayout({
@@ -15,7 +17,24 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <head>
+        <link
+          rel="preconnect"
+          href="https://fonts.googleapis.com"
+        />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=Manrope:wght@400;500;600;700;800&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body>
+        <Providers authEnabled={hasSupabaseAuth()}>{children}</Providers>
+      </body>
     </html>
   );
 }

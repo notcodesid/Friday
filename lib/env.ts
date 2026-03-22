@@ -12,6 +12,7 @@ function trimValue(value?: string | null) {
 
 export const env = {
   anthropicApiKey: trimValue(process.env.ANTHROPIC_API_KEY),
+  geminiApiKey: trimValue(process.env.GEMINI_API_KEY),
   model: trimValue(process.env.AI_MODEL) ?? DEFAULT_MODEL,
   defaultSiteUrl:
     trimValue(process.env.NEXT_PUBLIC_DEFAULT_SITE_URL) ?? DEFAULT_SITE_URL,
@@ -32,6 +33,10 @@ export const env = {
 
 export function hasAI() {
   return Boolean(env.anthropicApiKey);
+}
+
+export function hasGemini() {
+  return Boolean(env.geminiApiKey);
 }
 
 export function hasSupabase() {

@@ -1,8 +1,7 @@
-import { DashboardShell } from "@/components/dashboard-shell";
-import { hasSupabaseAuth } from "@/lib/env";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { HomePage } from "@/components/home-page";
 
-export default function HomePage() {
-  return <DashboardShell authEnabled={hasSupabaseAuth()} />;
+export default function Page() {
+  return <HomePage />;
 }

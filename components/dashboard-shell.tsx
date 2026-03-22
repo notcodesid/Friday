@@ -2,8 +2,6 @@
 
 import dynamic from "next/dynamic";
 
-import type { DashboardProps } from "@/components/dashboard";
-
 const Dashboard = dynamic(
   () => import("@/components/dashboard").then((module) => module.Dashboard),
   {
@@ -12,12 +10,12 @@ const Dashboard = dynamic(
       <div
         style={{
           minHeight: "100vh",
-          background: "#08090c",
-          color: "#a2a8b8",
+          background: "#050505",
+          color: "rgba(255,255,255,0.45)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontFamily: "Inter, -apple-system, sans-serif",
           fontSize: "0.9rem",
         }}
       >
@@ -27,6 +25,6 @@ const Dashboard = dynamic(
   },
 );
 
-export function DashboardShell(props: DashboardProps) {
-  return <Dashboard {...props} />;
+export function DashboardShell() {
+  return <Dashboard />;
 }

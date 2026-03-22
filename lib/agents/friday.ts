@@ -25,7 +25,7 @@ function buildAgents(
     },
     "content-strategist": {
       description:
-        "Content creation specialist — creates blog posts, social media copy, email campaigns, and OpenClock-ready social packages using real web research.",
+        "Content creation specialist — creates blog posts, social media copy, email campaigns, and poster-led social packages using real web research.",
       prompt: buildContentStrategistInstructions(context),
       tools: ["WebSearch", "WebFetch"],
     },
