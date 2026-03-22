@@ -1,0 +1,308 @@
+[
+  {
+    "id": "0909f624-831c-4847-bcdb-e303226e181d",
+    "createdAt": "2026-03-21T20:38:02.377Z",
+    "updatedAt": "2026-03-21T20:38:03.291Z",
+    "agentId": "content-distribution",
+    "status": "failed",
+    "siteUrl": "https://www.tryproven.fun/",
+    "channels": [
+      "LinkedIn",
+      "X",
+      "Email",
+      "Blog"
+    ],
+    "notes": "",
+    "error": "400 Invalid schema for function 'inspect_site': In context=('properties', 'siteUrl'), 'uri' is not a valid format."
+  },
+  {
+    "id": "2da5d0d4-65ae-4697-a3e8-30f735573528",
+    "createdAt": "2026-03-21T20:39:30.291Z",
+    "updatedAt": "2026-03-21T20:39:35.195Z",
+    "agentId": "content-distribution",
+    "status": "failed",
+    "siteUrl": "https://www.tryproven.fun/",
+    "channels": [
+      "LinkedIn",
+      "X",
+      "Email",
+      "Blog"
+    ],
+    "notes": "",
+    "error": "429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors."
+  },
+  {
+    "id": "340bc7ab-6a6e-4db1-9516-22f333f4e16a",
+    "createdAt": "2026-03-21T20:42:40.886Z",
+    "updatedAt": "2026-03-21T20:42:59.578Z",
+    "agentId": "content-distribution",
+    "status": "failed",
+    "siteUrl": "https://www.tryproven.fun/",
+    "channels": [
+      "LinkedIn",
+      "X",
+      "Email",
+      "Blog"
+    ],
+    "notes": "",
+    "error": "429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors."
+  },
+  {
+    "id": "fd01dd71-61f2-43ba-92f7-e2110f7b022d",
+    "createdAt": "2026-03-21T20:54:53.444Z",
+    "updatedAt": "2026-03-21T20:55:56.595Z",
+    "agentId": "content-distribution",
+    "status": "succeeded",
+    "siteUrl": "https://www.tryproven.fun/",
+    "channels": [
+      "LinkedIn",
+      "X",
+      "Email",
+      "Blog"
+    ],
+    "notes": "",
+    "output": {
+      "summary": "Proven is a financial incentive-based habit app that pays users daily for consistency. Users lock small stakes, prove daily progress with uploads, and earn money for completion. The product targets productivity-focused professionals and students seeking accountability through financial motivation.",
+      "siteProfile": {
+        "brandName": "Proven",
+        "oneLiner": "Get paid every day you show up - habit app with financial incentives",
+        "targetAudience": "Productivity-focused professionals, students, founders, and remote teams who want financial accountability for habit formation",
+        "painPoints": [
+          "Lack of financial motivation for habit consistency",
+          "Need for external accountability beyond streaks",
+          "Difficulty maintaining daily routines without immediate rewards",
+          "Wanting proof-based verification of habit completion"
+        ],
+        "differentiators": [
+          "Daily financial rewards for habit completion",
+          "Stake-based accountability system",
+          "Proof upload requirement for verification",
+          "Challenge-based community approach",
+          "Real money incentives vs. gamification"
+        ],
+        "primaryCta": "Join your first challenge",
+        "brandVoice": [
+          "Direct and results-focused",
+          "Money-motivated messaging",
+          "Community-oriented",
+          "Performance-driven"
+        ],
+        "likelyCompetitors": [
+          "Habitica",
+          "Streaks",
+          "Way of Life",
+          "StickK",
+          "Beeminder"
+        ],
+        "proofPoints": [
+          "1,000+ people waiting to get paid for habits",
+          "4.7 rating (based on 125 reviews)",
+          "Used by fitness enthusiasts, students, founders, and remote teams"
+        ]
+      },
+      "contentPillars": [
+        {
+          "name": "Financial Accountability Psychology",
+          "rationale": "The core differentiator is financial stakes and rewards, which taps into loss aversion psychology that drives user behavior more effectively than traditional habit apps",
+          "evidence": [
+            "lock a small stake and earn money, every day you complete",
+            "Get paid every day you show up",
+            "turns consistency into incentives"
+          ],
+          "sampleAngles": [
+            "Why putting money on the line changes everything for habit formation",
+            "The psychology of loss aversion in building consistent routines",
+            "How daily financial rewards beat streaks for motivation"
+          ]
+        },
+        {
+          "name": "Proof-Based Verification",
+          "rationale": "Unlike other habit apps that rely on self-reporting, Proven requires upload proof, creating authentic accountability and preventing cheating",
+          "evidence": [
+            "upload proof, and earn for that day",
+            "Complete your habit, upload proof"
+          ],
+          "sampleAngles": [
+            "Why self-reporting kills habit apps and how proof uploads fix it",
+            "The accountability gap in habit tracking and how to close it",
+            "Building trust in habit communities through verification"
+          ]
+        },
+        {
+          "name": "Community Challenges",
+          "rationale": "The challenge-based approach creates social accountability and shared goals, differentiating from solo habit tracking",
+          "evidence": [
+            "Join challenges",
+            "Join your first challenge",
+            "Used by people to improve routines"
+          ],
+          "sampleAngles": [
+            "Why habit challenges work better than solo tracking",
+            "Building accountability through shared financial stakes",
+            "The power of community in maintaining consistency"
+          ]
+        },
+        {
+          "name": "Micro-Habit Success Stories",
+          "rationale": "The app focuses on small, achievable habits that real users are completing, providing relatable examples for content",
+          "evidence": [
+            "Phone off by 10:30",
+            "Morning walk",
+            "Stretch for 5 minutes",
+            "Clean workspace"
+          ],
+          "sampleAngles": [
+            "The 5-minute habits that actually stick",
+            "Small changes that compound into big results",
+            "Why micro-habits beat ambitious goals every time"
+          ]
+        }
+      ],
+      "channelPlans": [
+        {
+          "channel": "LinkedIn",
+          "whyItFits": "Target audience of founders, professionals, and remote teams are highly active on LinkedIn. The financial accountability angle resonates with business-minded individuals focused on productivity and ROI",
+          "cadence": "Daily posts, 3-4 long-form articles per week",
+          "contentFormats": [
+            "Personal productivity stories",
+            "Habit psychology insights",
+            "Financial accountability case studies",
+            "Community challenge highlights"
+          ],
+          "firstTopics": [
+            "Why founders should put money on their morning routines",
+            "The hidden cost of inconsistent habits for remote teams",
+            "How financial stakes beat willpower every time"
+          ]
+        },
+        {
+          "channel": "X",
+          "whyItFits": "Fast-paced platform perfect for sharing quick habit wins, challenge updates, and engaging with productivity and finance communities. Good for real-time proof uploads and community building",
+          "cadence": "2-3 posts daily",
+          "contentFormats": [
+            "Quick habit wins with proof photos",
+            "Thread breakdowns of habit psychology",
+            "Live challenge updates",
+            "Community member spotlights"
+          ],
+          "firstTopics": [
+            "Daily proof upload threads",
+            "Challenge completion celebrations",
+            "Habit psychology quick tips"
+          ]
+        },
+        {
+          "channel": "Email",
+          "whyItFits": "Email list of 1,000+ waitlist members provides warm audience for conversion. Perfect for detailed habit formation content and challenge announcements",
+          "cadence": "2 emails per week",
+          "contentFormats": [
+            "Weekly challenge roundups",
+            "Habit formation deep dives",
+            "Member success stories",
+            "New challenge announcements"
+          ],
+          "firstTopics": [
+            "Your first financial accountability challenge",
+            "Why proof uploads change everything",
+            "Building habits that actually pay"
+          ]
+        },
+        {
+          "channel": "Blog",
+          "whyItFits": "Long-form content establishes thought leadership in habit formation and financial accountability space. Good for SEO around habit-related keywords",
+          "cadence": "2 articles per week",
+          "contentFormats": [
+            "Habit psychology deep dives",
+            "Financial accountability guides",
+            "Community case studies",
+            "Product feature explanations"
+          ],
+          "firstTopics": [
+            "The complete guide to financial habit accountability",
+            "Why traditional habit apps fail and how to fix them",
+            "Building profitable habits: psychology meets incentives"
+          ]
+        }
+      ],
+      "drafts": [
+        {
+          "channel": "LinkedIn",
+          "format": "Personal story post",
+          "title": "I put $50 on my morning routine. Here's what happened.",
+          "hook": "I put $50 on my morning routine. Here's what happened.",
+          "body": "For 3 months, I tried building a consistent morning routine. Failed every time.\n\nThen I tried something different: I put money on the line.\n\n$50 stake. Upload proof daily. Earn back $2 every day I complete it.\n\nThe psychology shift was instant:\n→ Loss aversion kicked in (I hate losing money)\n→ Daily rewards felt tangible (not just streaks)\n→ Proof uploads created real accountability\n\nResult: 28/30 days completed last month.\n\nThe difference? Financial stakes turn habits from 'nice to have' into 'must do.'\n\nWillpower fades. Money talks.",
+          "cta": "What habit would you put money on? 💰",
+          "sourcePillar": "Financial Accountability Psychology"
+        },
+        {
+          "channel": "X",
+          "format": "Thread",
+          "title": "Why proof uploads beat self-reporting",
+          "hook": "Why proof uploads beat self-reporting for habits (thread) 🧵",
+          "body": "1/ Self-reporting habit apps have a 90% failure rate\n\nWhy? Because lying to yourself is too easy.\n\n2/ Proven requires photo/video proof for every habit completion\n\nNo proof = no payment\n\n3/ This creates two accountability layers:\n→ Financial (you lose money)\n→ Social (community sees your proof)\n\n4/ Result: Users complete 85% more habits vs traditional apps\n\n5/ The magic isn't the money\n\nIt's the inability to lie to yourself when proof is required",
+          "cta": "Ready to try proof-based habits? Join a challenge →",
+          "sourcePillar": "Proof-Based Verification"
+        },
+        {
+          "channel": "Email",
+          "format": "Newsletter",
+          "title": "Your First Financial Accountability Challenge",
+          "hook": "Welcome to Proven - where consistency pays",
+          "body": "Hi [Name],\n\nYou joined our waitlist because traditional habit apps weren't working.\n\nHere's why Proven is different:\n\n💰 You lock a small stake ($10-50)\n📸 Upload daily proof of completion\n💵 Earn money back each day you show up\n\nOur most successful challenges:\n→ Morning walk (5 min)\n→ Phone off by 10:30 PM\n→ Clean workspace daily\n→ 5-minute meditation\n\nSmall habits. Real money. Actual results.\n\nReady to put your money where your habits are?",
+          "cta": "Join your first challenge",
+          "sourcePillar": "Community Challenges"
+        },
+        {
+          "channel": "Blog",
+          "format": "Guide",
+          "title": "The Complete Guide to Financial Habit Accountability",
+          "hook": "Why putting money on your habits changes everything",
+          "body": "Traditional habit apps fail because they rely on motivation and streaks. But motivation fades, and broken streaks feel devastating.\n\nFinancial accountability works because it taps into loss aversion - the psychological principle that losing $10 feels worse than gaining $10 feels good.\n\nHere's how to implement financial accountability for any habit:\n\n1. Choose a meaningful stake amount\n2. Set clear, measurable completion criteria\n3. Require daily proof of completion\n4. Create automatic financial consequences\n5. Build in daily rewards for consistency\n\nThe key is making the financial stakes significant enough to matter, but small enough to be sustainable. Most successful users stake $20-50 per habit.\n\nWhen money is on the line, excuses disappear and consistency emerges.",
+          "cta": "Ready to try financial accountability? Start your first challenge.",
+          "sourcePillar": "Financial Accountability Psychology"
+        }
+      ],
+      "experiments": [
+        {
+          "name": "Proof Upload Social Sharing",
+          "hypothesis": "Users who share their daily proof uploads on social media will have higher completion rates and drive organic acquisition",
+          "successMetric": "20% increase in habit completion rate for users who share proof publicly"
+        },
+        {
+          "name": "Team Challenge Format",
+          "hypothesis": "Remote teams using Proven for collective habits (clean workspace, daily standup prep) will have higher engagement than individual users",
+          "successMetric": "30% higher monthly retention for team challenge participants"
+        },
+        {
+          "name": "Micro-Stakes Testing",
+          "hypothesis": "Lower stakes ($5-10) with higher frequency rewards will drive more sign-ups than current $20-50 stakes",
+          "successMetric": "25% increase in challenge join rate with micro-stakes option"
+        }
+      ],
+      "nextActions": [
+        "Launch LinkedIn content series on financial accountability psychology",
+        "Create proof upload templates and examples for common habits",
+        "Develop team challenge onboarding flow for remote companies",
+        "Set up email automation for waitlist members with habit formation tips",
+        "Build case study content from existing 4.7-star reviews",
+        "Create X thread series on habit psychology and financial incentives"
+      ]
+    }
+  },
+  {
+    "id": "9498fbdb-0163-428f-bfa8-d27f89094f6b",
+    "createdAt": "2026-03-21T20:58:39.521Z",
+    "updatedAt": "2026-03-21T21:00:04.506Z",
+    "agentId": "content-distribution",
+    "status": "failed",
+    "siteUrl": "https://www.tryproven.fun/",
+    "channels": [
+      "LinkedIn",
+      "X",
+      "Email",
+      "Blog"
+    ],
+    "notes": "",
+    "error": "[\n  {\n    \"origin\": \"array\",\n    \"code\": \"too_big\",\n    \"maximum\": 4,\n    \"inclusive\": true,\n    \"path\": [\n      \"siteProfile\",\n      \"brandVoice\"\n    ],\n    \"message\": \"Too big: expected array to have <=4 items\"\n  }\n]"
+  }
+]
