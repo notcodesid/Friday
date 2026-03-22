@@ -1,5 +1,5 @@
 /**
- * Shared context passed through all Friday agent runs.
+ * Shared context passed through all Friday runs.
  * Carries brand identity and campaign goals so every agent
  * can tailor its output without re-asking the user.
  */
@@ -16,6 +16,8 @@ export type FridayContext = {
   brandVoice?: string[];
   /** Current campaign or marketing goal, if any */
   campaignGoal?: string;
+  /** Known competitor domains */
+  competitors?: string[];
   /** Free-form operator notes */
   notes?: string;
 };

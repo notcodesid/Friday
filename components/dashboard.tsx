@@ -24,8 +24,156 @@ import {
 
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
-const BRAND_SITE_URL = "https://www.tryproven.fun/";
-const BRAND_DOMAIN = new URL(BRAND_SITE_URL).hostname;
+const DEFAULT_SITE_URL = "https://www.tryproven.fun/";
+
+type BrandMeta = {
+  title: string;
+  description: string;
+  favicon: string;
+};
+
+function normalizeSiteUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : /^[\w.-]+\.[a-z]{2,}(?:[/?#]|$)/i.test(trimmed)
+      ? `https://${trimmed}`
+      : null;
+
+  if (!candidate) {
+    return null;
+  }
+
+  try {
+    const url = new URL(candidate);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function extractSiteUrl(value: string) {
+  const direct = normalizeSiteUrl(value);
+  if (direct) {
+    return direct;
+  }
+
+  const match = value.match(/https?:\/\/[^\s]+/i);
+  if (!match) {
+    return null;
+  }
+
+  return normalizeSiteUrl(match[0].replace(/[),.;!?]+$/, ""));
+}
+
+function getSiteDomain(siteUrl: string) {
+  try {
+    return new URL(siteUrl).hostname;
+  } catch {
+    return siteUrl;
+  }
+}
+
+function getFallbackBrandMeta(siteUrl: string): BrandMeta {
+  const domain = getSiteDomain(siteUrl).replace(/^www\./, "");
+
+  return {
+    title: domain,
+    description: "",
+    favicon: `https://www.google.com/s2/favicons?domain=${domain}&sz=64`,
+  };
+}
+
+function getLatestSiteUrl(messages: ChatMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "user") {
+      continue;
+    }
+
+    const siteUrl = extractSiteUrl(message.content);
+    if (siteUrl) {
+      return siteUrl;
+    }
+  }
+
+  return null;
+}
+
+function isPureSiteLoaderMessage(message: ChatMessage) {
+  if (message.role !== "user") {
+    return false;
+  }
+
+  const normalized = extractSiteUrl(message.content);
+  if (!normalized) {
+    return false;
+  }
+
+  return normalizeSiteUrl(message.content) === normalized;
+}
+
+function stripLegacySiteLoaderMessages(messages: ChatMessage[]) {
+  if (messages.length < 2) {
+    return messages;
+  }
+
+  const [first, second, ...rest] = messages;
+  if (
+    isPureSiteLoaderMessage(first) &&
+    second?.role === "assistant" &&
+    /i see you've shared/i.test(second.content)
+  ) {
+    return rest;
+  }
+
+  return messages;
+}
+
+function useBrandMeta(siteUrl: string | null) {
+  const fallbackBrand = siteUrl
+    ? getFallbackBrandMeta(siteUrl)
+    : {
+        title: "Website",
+        description: "",
+        favicon: "https://www.google.com/s2/favicons?sz=64",
+      };
+  const [loadedBrand, setLoadedBrand] = useState<(BrandMeta & { siteUrl: string }) | null>(
+    null,
+  );
+
+  const brand =
+    siteUrl && loadedBrand?.siteUrl === siteUrl ? loadedBrand : fallbackBrand;
+
+  useEffect(() => {
+    if (!siteUrl) {
+      return;
+    }
+
+    let cancelled = false;
+    fetch(`/api/brand-meta?url=${encodeURIComponent(siteUrl)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && data.title) {
+          setLoadedBrand({
+            siteUrl,
+            title: data.title,
+            description: data.description ?? "",
+            favicon: data.favicon ?? fallbackBrand.favicon,
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [fallbackBrand.favicon, siteUrl]);
+
+  return brand;
+}
 
 type DashboardProps = {
   authEnabled: boolean;
@@ -40,7 +188,10 @@ type ChatMessage = {
 };
 
 type StoredChatState = {
-  draft: string;
+  draft?: string;
+  chatDraft?: string;
+  terminalDraft?: string;
+  siteUrl?: string | null;
   messages: Array<
     Omit<ChatMessage, "timestamp"> & {
       timestamp: string;
@@ -95,6 +246,10 @@ function readStoredChat(storageKey: string): StoredChatState | null {
 
     return {
       draft: typeof parsed.draft === "string" ? parsed.draft : "",
+      chatDraft: typeof parsed.chatDraft === "string" ? parsed.chatDraft : undefined,
+      terminalDraft:
+        typeof parsed.terminalDraft === "string" ? parsed.terminalDraft : undefined,
+      siteUrl: typeof parsed.siteUrl === "string" ? parsed.siteUrl : null,
       messages: parsed.messages
         .filter(
           (message) =>
@@ -117,20 +272,30 @@ function readStoredChat(storageKey: string): StoredChatState | null {
   }
 }
 
-function writeStoredChat(storageKey: string, draft: string, messages: ChatMessage[]) {
+function writeStoredChat(
+  storageKey: string,
+  payload: {
+    chatDraft: string;
+    terminalDraft: string;
+    siteUrl: string | null;
+    messages: ChatMessage[];
+  },
+) {
   if (typeof window === "undefined") {
     return;
   }
 
-  const payload: StoredChatState = {
-    draft,
-    messages: messages.map((message) => ({
+  const stored: StoredChatState = {
+    chatDraft: payload.chatDraft,
+    terminalDraft: payload.terminalDraft,
+    siteUrl: payload.siteUrl,
+    messages: payload.messages.map((message) => ({
       ...message,
       timestamp: message.timestamp.toISOString(),
     })),
   };
 
-  window.localStorage.setItem(storageKey, JSON.stringify(payload));
+  window.localStorage.setItem(storageKey, JSON.stringify(stored));
 }
 
 function reviveStoredMessages(
@@ -189,10 +354,16 @@ function useChat({
   accessToken,
   authRequired,
   onAuthRequired,
+  competitors,
+  brand,
+  siteUrl,
 }: {
   accessToken?: string;
   authRequired: boolean;
   onAuthRequired: () => void;
+  competitors: string[];
+  brand: BrandMeta;
+  siteUrl: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -246,13 +417,10 @@ function useChat({
             message: trimmed,
             agentId,
             brandContext: {
-              brandName: "Proven",
-              oneLiner:
-                "Habit challenge app where users stake money and earn by showing up consistently",
-              targetAudience:
-                "people who want to build habits with financial accountability",
-              brandVoice: ["sharp", "motivational", "no-fluff", "founder-led"],
-              siteUrl: BRAND_SITE_URL,
+              brandName: brand.title,
+              oneLiner: brand.description || undefined,
+              siteUrl,
+              competitors,
             },
           }),
           signal: controller.signal,
@@ -316,7 +484,7 @@ function useChat({
         abortRef.current = null;
       }
     },
-    [accessToken, authRequired, isStreaming, onAuthRequired],
+    [accessToken, authRequired, brand, competitors, isStreaming, onAuthRequired, siteUrl],
   );
 
   const stopStreaming = useCallback(() => {
@@ -551,17 +719,34 @@ function AuthModal({
 export function Dashboard({ authEnabled }: DashboardProps) {
   const [activeTab, setActiveTab] = useState("Health");
   const [chatInput, setChatInput] = useState("");
+  const [terminalInput, setTerminalInput] = useState("");
+  const [currentSiteUrl, setCurrentSiteUrl] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authLoadingState, setAuthLoadingState] = useState(authEnabled);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isAuthMenuOpen, setIsAuthMenuOpen] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [terminalError, setTerminalError] = useState<string | null>(null);
   const [linkSentTo, setLinkSentTo] = useState<string | null>(null);
   const [isSendingLink, setIsSendingLink] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [competitors, setCompetitors] = useState<string[]>([]);
+  const [hydratedChatStorageKey, setHydratedChatStorageKey] = useState<string | null>(null);
+  const [hydratedCompetitorStorageKey, setHydratedCompetitorStorageKey] = useState<string | null>(
+    null,
+  );
+  const [competitorInput, setCompetitorInput] = useState("");
+  const [isDiscoveringCompetitors, setIsDiscoveringCompetitors] = useState(false);
+  const isSiteLoaded = Boolean(currentSiteUrl);
+  const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
+  const competitorStorageKey = currentSiteUrl
+    ? `friday-competitors:${currentDomain}`
+    : null;
+  const brand = useBrandMeta(currentSiteUrl);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const terminalInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
   const authMenuRef = useRef<HTMLDivElement>(null);
 
   const openAuthModal = useCallback(() => {
@@ -577,6 +762,9 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     accessToken: session?.access_token,
     authRequired: authEnabled,
     onAuthRequired: openAuthModal,
+    competitors,
+    brand,
+    siteUrl: currentSiteUrl ?? DEFAULT_SITE_URL,
   });
 
   const browserAuthClient = authEnabled ? getSupabaseBrowserClient() : null;
@@ -586,7 +774,9 @@ export function Dashboard({ authEnabled }: DashboardProps) {
       : null
     : getChatStorageKey("preview");
   const promptCount = getPromptCount(messages);
-  const terminalSessionName = getTerminalSessionName(messages);
+  const terminalSessionName = currentSiteUrl
+    ? truncateText(currentSiteUrl, 48)
+    : getTerminalSessionName(messages);
   const authSetupError =
     authEnabled && !browserAuthClient
       ? "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are required for authentication."
@@ -594,18 +784,101 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   const isAuthLoading =
     authEnabled && Boolean(browserAuthClient) ? authLoadingState : false;
   const isLocked = authEnabled && !isAuthLoading && !session?.access_token;
-  const visibleAuthError = authError ?? authSetupError;
+  const visibleAuthError = authError ?? authSetupError ?? terminalError;
   const terminalStatus = isAuthLoading
     ? "Checking session"
     : isLocked
       ? "Authentication required"
       : promptCount > 0
         ? `${promptCount} ${promptCount === 1 ? "prompt" : "prompts"} in session`
-        : "Ready — ask me anything about marketing";
+        : isSiteLoaded
+          ? "Site loaded — use the chat panel on the right"
+          : "Load a website to start";
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    if (!competitorStorageKey || hydratedCompetitorStorageKey !== competitorStorageKey) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(competitorStorageKey, JSON.stringify(competitors));
+    } catch { /* ignore */ }
+  }, [competitorStorageKey, competitors, hydratedCompetitorStorageKey]);
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      if (!competitorStorageKey) {
+        setCompetitors([]);
+        setHydratedCompetitorStorageKey(null);
+        return;
+      }
+
+      setIsDiscoveringCompetitors(false);
+
+      try {
+        const stored = window.localStorage.getItem(competitorStorageKey);
+        if (!stored) {
+          setCompetitors([]);
+          setHydratedCompetitorStorageKey(competitorStorageKey);
+          return;
+        }
+
+        const parsed = JSON.parse(stored) as string[];
+        setCompetitors(Array.isArray(parsed) ? parsed : []);
+        setHydratedCompetitorStorageKey(competitorStorageKey);
+      } catch {
+        setCompetitors([]);
+        setHydratedCompetitorStorageKey(competitorStorageKey);
+      }
+    });
+  }, [competitorStorageKey]);
+
+  useEffect(() => {
+    if (!currentSiteUrl) return;
+    if (competitors.length > 0 || isDiscoveringCompetitors) return;
+    // Wait until brand data has been fetched
+    if (!brand.description) return;
+    // Skip if auth is required but no session yet
+    if (authEnabled && !session?.access_token) return;
+
+    let cancelled = false;
+    setIsDiscoveringCompetitors(true);
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/competitors", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(session?.access_token
+              ? { Authorization: `Bearer ${session.access_token}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            brandName: brand.title,
+            oneLiner: brand.description,
+            siteUrl: currentSiteUrl,
+          }),
+        });
+
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { competitors?: string[] };
+        if (cancelled || !data.competitors?.length) return;
+        setCompetitors(data.competitors);
+      } catch {
+        // silently fail — user can still add manually
+      } finally {
+        if (!cancelled) setIsDiscoveringCompetitors(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authEnabled, currentSiteUrl, session?.access_token, brand.description]);
 
   useEffect(() => {
     if (!authEnabled) {
@@ -661,30 +934,48 @@ export function Dashboard({ authEnabled }: DashboardProps) {
       if (!chatStorageKey) {
         replaceMessages([]);
         setChatInput("");
+        setTerminalInput("");
+        setCurrentSiteUrl(null);
+        setHydratedChatStorageKey(null);
         return;
       }
 
       const stored = readStoredChat(chatStorageKey);
-      replaceMessages(reviveStoredMessages(stored?.messages));
-      setChatInput(stored?.draft ?? "");
+      const restoredMessages = reviveStoredMessages(stored?.messages);
+      const cleanedMessages = stripLegacySiteLoaderMessages(restoredMessages);
+      replaceMessages(cleanedMessages);
+      setChatInput(stored?.chatDraft ?? stored?.draft ?? "");
+      setTerminalInput(stored?.terminalDraft ?? "");
+      setCurrentSiteUrl(stored?.siteUrl ?? getLatestSiteUrl(restoredMessages) ?? null);
+      setHydratedChatStorageKey(chatStorageKey);
     });
   }, [chatStorageKey, replaceMessages]);
 
   useEffect(() => {
-    if (!chatStorageKey) {
+    if (!chatStorageKey || hydratedChatStorageKey !== chatStorageKey) {
       return;
     }
 
-    writeStoredChat(chatStorageKey, chatInput, messages);
-  }, [chatInput, chatStorageKey, messages]);
+    writeStoredChat(chatStorageKey, {
+      chatDraft: chatInput,
+      terminalDraft: terminalInput,
+      siteUrl: currentSiteUrl,
+      messages,
+    });
+  }, [chatInput, chatStorageKey, currentSiteUrl, hydratedChatStorageKey, messages, terminalInput]);
 
   useEffect(() => {
     if (isLocked || isAuthLoading) {
       return;
     }
 
-    inputRef.current?.focus();
-  }, [isAuthLoading, isLocked]);
+    if (isSiteLoaded) {
+      chatInputRef.current?.focus();
+      return;
+    }
+
+    terminalInputRef.current?.focus();
+  }, [isAuthLoading, isLocked, isSiteLoaded]);
 
   useEffect(() => {
     function handleDocumentClick(event: MouseEvent) {
@@ -715,6 +1006,31 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     };
   }, [isAuthMenuOpen]);
 
+  function handleTerminalSubmit(event?: FormEvent) {
+    event?.preventDefault();
+
+    if (isLocked) {
+      openAuthModal();
+      return;
+    }
+
+    if (isStreaming || !terminalInput.trim()) {
+      return;
+    }
+
+    const nextSiteUrl = extractSiteUrl(terminalInput);
+    if (!nextSiteUrl) {
+      setTerminalError("Paste a valid website URL in the terminal input.");
+      return;
+    }
+
+    setTerminalError(null);
+    setCurrentSiteUrl(nextSiteUrl);
+    setTerminalInput("");
+    replaceMessages([]);
+    setChatInput("");
+  }
+
   function handleChatSubmit(event?: FormEvent) {
     event?.preventDefault();
 
@@ -723,10 +1039,16 @@ export function Dashboard({ authEnabled }: DashboardProps) {
       return;
     }
 
+    if (!isSiteLoaded) {
+      setTerminalError("Load a website in the terminal before starting chat.");
+      return;
+    }
+
     if (!chatInput.trim() || isStreaming) {
       return;
     }
 
+    setTerminalError(null);
     void sendMessage(chatInput);
     setChatInput("");
   }
@@ -737,11 +1059,31 @@ export function Dashboard({ authEnabled }: DashboardProps) {
       return;
     }
 
+    if (!isSiteLoaded) {
+      setTerminalError("Load a website in the terminal before using quick actions.");
+      return;
+    }
+
     if (isStreaming) {
       return;
     }
 
+    setTerminalError(null);
     void sendMessage(prompt);
+  }
+
+  function addCompetitor(domain: string) {
+    const cleaned = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    if (!cleaned || competitors.includes(cleaned)) return;
+    setCompetitors((prev) => [...prev, cleaned]);
+  }
+
+  function removeCompetitor(domain: string) {
+    setCompetitors((prev) => prev.filter((c) => c !== domain));
+  }
+
+  function analyzeCompetitor(domain: string) {
+    handleQuickAction(`Analyze our competitor ${domain} — scrape their site, find their positioning, strengths, weaknesses, content strategy, and identify gaps we can exploit.`);
   }
 
   async function handleSendMagicLink(event: FormEvent<HTMLFormElement>) {
@@ -927,7 +1269,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
           {visibleAuthError && <div className="auth-inline-error">{visibleAuthError}</div>}
 
           <form
-            onSubmit={handleChatSubmit}
+            onSubmit={handleTerminalSubmit}
             style={{ display: "flex", alignItems: "center", marginTop: "8px" }}
           >
             <div
@@ -940,12 +1282,13 @@ export function Dashboard({ authEnabled }: DashboardProps) {
             ></div>
             {!isStreaming && <span style={{ color: "#22c55e", marginRight: "8px" }}>&gt;</span>}
             <input
-              ref={inputRef}
+              ref={terminalInputRef}
               type="text"
-              value={chatInput}
+              value={terminalInput}
               onChange={(event) => {
                 if (!isLocked) {
-                  setChatInput(event.target.value);
+                  setTerminalInput(event.target.value);
+                  setTerminalError(null);
                 }
               }}
               onFocus={() => {
@@ -962,7 +1305,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                     ? "Sign in to start a protected session..."
                     : isStreaming
                       ? "Waiting for response..."
-                      : "Type your message or website URL here..."
+                      : "Paste a website URL here..."
               }
               style={{
                 background: "transparent",
@@ -979,29 +1322,26 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
       </div>
 
-      {messages.length > 0 && (
+      {isSiteLoaded && (
         <div className="dashboard-grid">
           <div className="column">
             <div className="card">
               <div className="card-header">
                 <div className="flex items-center gap-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={`https://www.google.com/s2/favicons?domain=${BRAND_DOMAIN}&sz=32`}
-                    alt="Proven"
+                    src={brand.favicon}
+                    alt={brand.title}
                     style={{ width: 16, height: 16 }}
                   />
-                  <span>Proven</span>
+                  <span>{brand.title}</span>
                 </div>
               </div>
               <div
                 className="card-body text-sm text-muted"
                 style={{ lineHeight: 1.6 }}
               >
-                Users join habit challenges, lock a small financial stake, and then
-                submit daily proof of completion to earn money. If they show up
-                consistently, they earn; if they don&apos;t, they simply don&apos;t. The app
-                supports flexible streak rules for travel, sick days, and rest days so
-                real life doesn&apos;t derail progress.
+                {brand.description || "Loading brand info..."}
               </div>
             </div>
 
@@ -1054,93 +1394,73 @@ export function Dashboard({ authEnabled }: DashboardProps) {
             <div className="card">
               <div className="card-header">Competitors</div>
               <div className="card-body">
+                {isDiscoveringCompetitors && competitors.length === 0 && (
+                  <div
+                    className="flex items-center gap-2 text-muted text-sm"
+                    style={{ marginBottom: 8 }}
+                  >
+                    <Loader2
+                      className="spin"
+                      style={{ width: 14, height: 14 }}
+                    />
+                    Discovering competitors...
+                  </div>
+                )}
                 <div className="tag-list">
-                  <div className="tag-item">
-                    <span
-                      className="flex items-center justify-center font-bold text-xs"
-                      style={{
-                        width: 16,
-                        height: 16,
-                        background: "#fff",
-                        color: "#000",
-                        borderRadius: 2,
-                      }}
+                  {competitors.map((domain) => (
+                    <div
+                      key={domain}
+                      className="tag-item"
+                      style={{ cursor: "pointer" }}
+                      onClick={() => analyzeCompetitor(domain)}
                     >
-                      F.
-                    </span>
-                    forfeit.app
-                    <X
-                      style={{
-                        width: 12,
-                        height: 12,
-                        cursor: "pointer",
-                        marginLeft: 4,
-                      }}
-                      className="text-muted"
-                    />
-                  </div>
-                  <div className="tag-item">
-                    <Target style={{ width: 14, height: 14, color: "#ef4444" }} />
-                    stickk.com
-                    <X
-                      style={{
-                        width: 12,
-                        height: 12,
-                        cursor: "pointer",
-                        marginLeft: 4,
-                      }}
-                      className="text-muted"
-                    />
-                  </div>
-                  <div className="tag-item">
-                    <span
-                      className="flex items-center justify-center text-xs"
-                      style={{
-                        width: 16,
-                        height: 16,
-                        background: "#f59e0b",
-                        color: "#fff",
-                        borderRadius: 2,
-                      }}
-                    >
-                      B
-                    </span>
-                    beeminder.com
-                    <X
-                      style={{
-                        width: 12,
-                        height: 12,
-                        cursor: "pointer",
-                        marginLeft: 4,
-                      }}
-                      className="text-muted"
-                    />
-                  </div>
-                  <div className="tag-item">
-                    <span
-                      className="flex items-center justify-center text-xs text-bold"
-                      style={{
-                        width: 16,
-                        height: 16,
-                        background: "#8b5cf6",
-                        color: "#fff",
-                        borderRadius: 2,
-                      }}
-                    >
-                      W
-                    </span>
-                    waybetter.app
-                    <X
-                      style={{
-                        width: 12,
-                        height: 12,
-                        cursor: "pointer",
-                        marginLeft: 4,
-                      }}
-                      className="text-muted"
-                    />
-                  </div>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+                        alt={domain}
+                        style={{ width: 16, height: 16, borderRadius: 2 }}
+                      />
+                      {domain}
+                      <X
+                        style={{
+                          width: 12,
+                          height: 12,
+                          cursor: "pointer",
+                          marginLeft: 4,
+                        }}
+                        className="text-muted"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeCompetitor(domain);
+                        }}
+                      />
+                    </div>
+                  ))}
                 </div>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addCompetitor(competitorInput);
+                    setCompetitorInput("");
+                  }}
+                  style={{ marginTop: 8 }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Add competitor domain..."
+                    value={competitorInput}
+                    onChange={(e) => setCompetitorInput(e.target.value)}
+                    style={{
+                      width: "100%",
+                      fontSize: "0.8rem",
+                      padding: "6px 10px",
+                      background: "var(--bg)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      outline: "none",
+                    }}
+                  />
+                </form>
               </div>
             </div>
 
@@ -1150,7 +1470,9 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 className="list-item"
                 onClick={() =>
                   handleQuickAction(
-                    "Analyze our competitor forfeit.app and find content gaps we can exploit",
+                    competitors.length > 0
+                      ? `Analyze our competitors (${competitors.join(", ")}) and find content gaps we can exploit`
+                      : "Research and identify our top competitors in the habit tracking / accountability app space",
                   )
                 }
               >
@@ -1201,7 +1523,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 className="list-item"
                 onClick={() =>
                   handleQuickAction(
-                    "Create a 3-email welcome sequence for new Proven signups",
+                    `Create a 3-email welcome sequence for new ${brand.title} signups`,
                   )
                 }
               >
@@ -1390,7 +1712,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 style={{ cursor: "pointer" }}
                 onClick={() =>
                   handleQuickAction(
-                    "Analyze the SEO health of tryproven.fun and give me specific recommendations to improve rankings",
+                    `Analyze the SEO health of ${currentDomain} and give me specific recommendations to improve rankings`,
                   )
                 }
               >
@@ -1413,7 +1735,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 style={{ cursor: "pointer" }}
                 onClick={() =>
                   handleQuickAction(
-                    "Generate 3 SEO-optimized blog post ideas for Proven that could rank well. Research what's currently ranking for habit tracking and accountability apps.",
+                    `Generate 3 SEO-optimized blog post ideas for ${brand.title} that could rank well. Research what's currently ranking for our space.`,
                   )
                 }
               >
@@ -1436,7 +1758,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 style={{ borderBottom: "none", cursor: "pointer" }}
                 onClick={() =>
                   handleQuickAction(
-                    "Research what's trending on Hacker News around habit tracking, personal finance apps, and accountability. Draft a Show HN post for Proven.",
+                    `Research what's trending on Hacker News around our space. Draft a Show HN post for ${brand.title}.`,
                   )
                 }
               >
@@ -1493,7 +1815,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                       }}
                     />
                     <div className="text-sm text-muted" style={{ textAlign: "center" }}>
-                      Ask me anything about marketing Proven.
+                      Ask me anything about marketing {brand.title}.
                       <br />I research real data before answering.
                     </div>
                   </div>
@@ -1505,7 +1827,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
               </div>
               <form onSubmit={handleChatSubmit} className="chat-input-wrapper">
                 <input
-                  ref={inputRef}
+                  ref={chatInputRef}
                   type="text"
                   className="chat-input"
                   placeholder={

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { FridayContext } from "@/lib/agents/core/context";
 import { runAgentStream } from "@/lib/agents/core/runner";
 import { cmoAgent } from "@/lib/agents/cmo";
+import { competitorAnalystAgent } from "@/lib/agents/competitor-analyst";
 import { contentStrategistAgent } from "@/lib/agents/content-strategist";
 import { requireSession } from "@/lib/auth/session";
 import { hasAI } from "@/lib/env";
@@ -13,6 +14,7 @@ export const maxDuration = 120;
 const agents: Record<string, typeof cmoAgent> = {
   cmo: cmoAgent,
   "content-strategist": contentStrategistAgent,
+  "competitor-analyst": competitorAnalystAgent,
 };
 
 type ChatRequest = {
