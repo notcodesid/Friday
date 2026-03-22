@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
+  ArrowLeft,
   CheckCircle,
   Chrome,
   ChevronRight,
@@ -10,11 +11,19 @@ import {
   Loader2,
   LogOut,
   Mail,
-  ShieldCheck,
   X,
 } from "lucide-react";
 
+type ViewType =
+  | "home"
+  | "company-report"
+  | "product-information"
+  | "competitor-analysis"
+  | "brand-voice"
+  | "strategic-insights";
+
 import type {
+  BrandVoiceDoc,
   CompetitorRecord,
   ProductAnalysis,
   CompetitorAnalysis,
@@ -406,17 +415,7 @@ export type DashboardProps = {
   authEnabled: boolean;
 };
 
-type StoredWorkspaceState = {
-  terminalDraft?: string;
-  siteUrl?: string | null;
-};
-
-const WORKSPACE_STORAGE_PREFIX = "friday-workspace";
 const DEFAULT_TERMINAL_SESSION_NAME = "Friday";
-
-function getWorkspaceStorageKey(scope: string) {
-  return `${WORKSPACE_STORAGE_PREFIX}:${scope}`;
-}
 
 function truncateText(value: string, maxLength: number) {
   const trimmed = value.trim();
@@ -427,47 +426,6 @@ function truncateText(value: string, maxLength: number) {
   return `${trimmed.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-function readStoredWorkspace(storageKey: string): StoredWorkspaceState | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) {
-      return null;
-    }
-
-    const parsed = JSON.parse(raw) as Partial<StoredWorkspaceState>;
-
-    return {
-      terminalDraft:
-        typeof parsed.terminalDraft === "string" ? parsed.terminalDraft : undefined,
-      siteUrl: typeof parsed.siteUrl === "string" ? parsed.siteUrl : null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredWorkspace(
-  storageKey: string,
-  payload: {
-    terminalDraft: string;
-    siteUrl: string | null;
-  },
-) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const stored: StoredWorkspaceState = {
-    terminalDraft: payload.terminalDraft,
-    siteUrl: payload.siteUrl,
-  };
-
-  window.localStorage.setItem(storageKey, JSON.stringify(stored));
-}
 
 function getDisplayName(session: Session | null) {
   const fullName = session?.user.user_metadata.full_name;
@@ -481,6 +439,23 @@ function getDisplayName(session: Session | null) {
   }
 
   return email.split("@")[0] ?? email;
+}
+
+function getAvatarUrl(session: Session | null) {
+  const metadata = session?.user.user_metadata;
+  const candidates = [
+    metadata?.avatar_url,
+    metadata?.picture,
+    metadata?.photoURL,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
 }
 
 function getInitials(value: string) {
@@ -553,12 +528,22 @@ function AuthControl({
   }
 
   const displayName = getDisplayName(session);
+  const avatarUrl = getAvatarUrl(session);
   const initials = getInitials(displayName);
 
   return (
     <div className="auth-menu-shell">
       <button type="button" className="user-badge" onClick={onToggleMenu}>
-        <div className="user-avatar text-xs">{initials}</div>
+        <div className="user-avatar text-xs">
+          {avatarUrl ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={avatarUrl} alt={displayName} className="user-avatar-image" />
+            </>
+          ) : (
+            initials
+          )}
+        </div>
         <div className="auth-pill-copy">
           <span>{displayName}</span>
         </div>
@@ -697,30 +682,100 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   const [isSendingLink, setIsSendingLink] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [competitors, setCompetitors] = useState<CompetitorRecord[]>([]);
-  const [hydratedWorkspaceStorageKey, setHydratedWorkspaceStorageKey] = useState<string | null>(
-    null,
-  );
-  const [hydratedCompetitorStorageKey, setHydratedCompetitorStorageKey] = useState<string | null>(
-    null,
-  );
   const [competitorInput, setCompetitorInput] = useState("");
   const [competitorError, setCompetitorError] = useState<string | null>(null);
   const [isDiscoveringCompetitors, setIsDiscoveringCompetitors] = useState(false);
+  const [brandVoiceDoc, setBrandVoiceDoc] = useState<BrandVoiceDoc | null>(null);
+  const [isBrandVoiceLoading, setIsBrandVoiceLoading] = useState(false);
+  const [brandVoiceError, setBrandVoiceError] = useState<string | null>(null);
+  const [currentView, setCurrentView] = useState<ViewType>("home");
   const isSiteLoaded = Boolean(currentSiteUrl);
-  const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
-  const competitorStorageKey = currentSiteUrl
-    ? `friday-competitors:v2:${currentDomain}`
-    : null;
   const brand = useBrandMeta(currentSiteUrl);
+  const attemptedDiscoveryRef = useRef(false);
 
   const analysis = useAnalysisPipeline({
     accessToken: session?.access_token,
     authRequired: authEnabled,
   });
 
+  const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
+  const insightCount = analysis.insights
+    ? analysis.insights.opportunities.length +
+      analysis.insights.gaps.length +
+      analysis.insights.recommendations.length
+    : 0;
+  const outlineItems: Array<{
+    view: ViewType;
+    label: string;
+    status?: string;
+    complete?: boolean;
+  }> = [
+    {
+      view: "company-report",
+      label: "Company Report",
+      status: currentDomain || "Overview",
+    },
+    {
+      view: "product-information",
+      label: "Product Information",
+      status: analysis.productAnalysis ? "Ready" : "Pending",
+      complete: Boolean(analysis.productAnalysis),
+    },
+    {
+      view: "competitor-analysis",
+      label: "Competitor Analysis",
+      status: competitors.length > 0 ? `${competitors.length} tracked` : "Pending",
+      complete: competitors.length > 0,
+    },
+    {
+      view: "brand-voice",
+      label: "Brand Voice",
+      status: brandVoiceDoc ? "Ready" : isBrandVoiceLoading ? "Drafting" : "Pending",
+      complete: Boolean(brandVoiceDoc),
+    },
+    {
+      view: "strategic-insights",
+      label: "Strategic Insights",
+      status: insightCount > 0 ? `${insightCount} notes` : "Pending",
+      complete: Boolean(analysis.insights),
+    },
+  ];
+  const pipelineSteps = [
+    { step: 1, label: "Product Analysis" },
+    { step: 2, label: "Competitor Discovery" },
+    { step: 3, label: "Competitor Analysis" },
+    { step: 4, label: "Strategic Insights" },
+  ];
+  const landingSections = [
+    {
+      label: "Company Report",
+      note: "Overview, domain, and workspace status",
+    },
+    {
+      label: "Product Information",
+      note: "Positioning, audience, and differentiators",
+    },
+    {
+      label: "Competitor Analysis",
+      note: "Tracked brands and comparison notes",
+    },
+    {
+      label: "Brand Voice",
+      note: "Messaging rules, tone, and examples",
+    },
+    {
+      label: "Strategic Insights",
+      note: "Opportunities, gaps, and next moves",
+    },
+  ];
+  const landingExamples = [
+    "https://linear.app",
+    "https://www.notion.so",
+    "https://www.reddit.com",
+  ];
+
   const terminalInputRef = useRef<HTMLInputElement>(null);
   const authMenuRef = useRef<HTMLDivElement>(null);
-  const attemptedCompetitorDiscoveryKeyRef = useRef<string | null>(null);
 
   const openAuthModal = useCallback(() => {
     setIsAuthMenuOpen(false);
@@ -731,12 +786,30 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     setIsAuthModalOpen(false);
   }, []);
 
+  const generateBrandVoice = useCallback(async () => {
+    if (!currentSiteUrl || isBrandVoiceLoading) return;
+    setIsBrandVoiceLoading(true);
+    setBrandVoiceError(null);
+    try {
+      const res = await fetch("/api/brand-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteUrl: currentSiteUrl }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(data.error ?? "Request failed");
+      }
+      const doc = (await res.json()) as BrandVoiceDoc;
+      setBrandVoiceDoc(doc);
+    } catch (err) {
+      setBrandVoiceError(err instanceof Error ? err.message : "Failed to generate brand voice");
+    } finally {
+      setIsBrandVoiceLoading(false);
+    }
+  }, [currentSiteUrl, isBrandVoiceLoading]);
+
   const browserAuthClient = authEnabled ? getSupabaseBrowserClient() : null;
-  const workspaceStorageKey = authEnabled
-    ? session?.user.id
-      ? getWorkspaceStorageKey(session.user.id)
-      : null
-    : getWorkspaceStorageKey("preview");
   const terminalSessionName = currentSiteUrl
     ? truncateText(currentSiteUrl, 48)
     : DEFAULT_TERMINAL_SESSION_NAME;
@@ -758,48 +831,6 @@ export function Dashboard({ authEnabled }: DashboardProps) {
           ? "Site loaded"
           : "Load a website to start";
 
-  useEffect(() => {
-    if (!competitorStorageKey || hydratedCompetitorStorageKey !== competitorStorageKey) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(competitorStorageKey, JSON.stringify(competitors));
-    } catch { /* ignore */ }
-  }, [competitorStorageKey, competitors, hydratedCompetitorStorageKey]);
-
-  useEffect(() => {
-    void Promise.resolve().then(() => {
-      if (!competitorStorageKey) {
-        setCompetitors([]);
-        setCompetitorError(null);
-        setHydratedCompetitorStorageKey(null);
-        return;
-      }
-
-      setIsDiscoveringCompetitors(false);
-
-      try {
-        const stored = window.localStorage.getItem(competitorStorageKey);
-        if (!stored) {
-          setCompetitors([]);
-          setCompetitorError(null);
-          setHydratedCompetitorStorageKey(competitorStorageKey);
-          return;
-        }
-
-        const parsed = JSON.parse(stored) as unknown;
-        setCompetitors(normalizeCompetitorRecords(parsed));
-        setCompetitorError(null);
-        setHydratedCompetitorStorageKey(competitorStorageKey);
-      } catch {
-        setCompetitors([]);
-        setCompetitorError(null);
-        setHydratedCompetitorStorageKey(competitorStorageKey);
-      }
-    });
-  }, [competitorStorageKey]);
-
   // Sync pipeline competitor results to the left-column list
   useEffect(() => {
     if (analysis.competitors && analysis.competitors.length > 0) {
@@ -807,16 +838,16 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     }
   }, [analysis.competitors]);
 
+  // Auto-discover competitors when a site is loaded
   useEffect(() => {
-    if (!currentSiteUrl || !competitorStorageKey) return;
-    if (hydratedCompetitorStorageKey !== competitorStorageKey) return;
+    if (!currentSiteUrl) return;
     if (competitors.length > 0 || isDiscoveringCompetitors) return;
     if (analysis.isRunning || analysis.competitors) return;
-    if (attemptedCompetitorDiscoveryKeyRef.current === competitorStorageKey) return;
+    if (attemptedDiscoveryRef.current) return;
     if (authEnabled && !session?.access_token) return;
 
     let cancelled = false;
-    attemptedCompetitorDiscoveryKeyRef.current = competitorStorageKey;
+    attemptedDiscoveryRef.current = true;
     setCompetitorError(null);
     setIsDiscoveringCompetitors(true);
 
@@ -880,10 +911,8 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     brand.description,
     brand.title,
     competitorError,
-    competitorStorageKey,
     competitors.length,
     currentSiteUrl,
-    hydratedCompetitorStorageKey,
     isDiscoveringCompetitors,
     analysis.competitors,
     analysis.isRunning,
@@ -940,31 +969,11 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   }, [authEnabled, browserAuthClient]);
 
   useEffect(() => {
-    void Promise.resolve().then(() => {
-      if (!workspaceStorageKey) {
-        setTerminalInput("");
-        setCurrentSiteUrl(null);
-        setHydratedWorkspaceStorageKey(null);
-        return;
-      }
-
-      const stored = readStoredWorkspace(workspaceStorageKey);
-      setTerminalInput(stored?.terminalDraft ?? "");
-      setCurrentSiteUrl(stored?.siteUrl ?? null);
-      setHydratedWorkspaceStorageKey(workspaceStorageKey);
-    });
-  }, [workspaceStorageKey]);
-
-  useEffect(() => {
-    if (!workspaceStorageKey || hydratedWorkspaceStorageKey !== workspaceStorageKey) {
-      return;
-    }
-
-    writeStoredWorkspace(workspaceStorageKey, {
-      terminalDraft: terminalInput,
-      siteUrl: currentSiteUrl,
-    });
-  }, [currentSiteUrl, hydratedWorkspaceStorageKey, terminalInput, workspaceStorageKey]);
+    setBrandVoiceDoc(null);
+    setBrandVoiceError(null);
+    setIsBrandVoiceLoading(false);
+    setCurrentView("home");
+  }, [currentSiteUrl]);
 
   useEffect(() => {
     if (isLocked || isAuthLoading) {
@@ -1041,11 +1050,8 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   }
 
   function retryCompetitorDiscovery() {
-    if (!competitorStorageKey) {
-      return;
-    }
-
-    attemptedCompetitorDiscoveryKeyRef.current = null;
+    if (!currentSiteUrl) return;
+    attemptedDiscoveryRef.current = false;
     setCompetitors([]);
     setCompetitorError(null);
   }
@@ -1137,582 +1143,1154 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     setIsAuthModalOpen(true);
   }
 
-  return (
-    <div className="dashboard-container">
-      <div className="terminal-card">
-        <div className="terminal-header">
-          <div className="flex items-center">
-            <div className="terminal-title">
-              <div className="brand" style={{ color: "var(--muted)" }}>
-                <span>Friday</span>
-              </div>
+  function renderSidebar() {
+    return (
+      <div className="report-sidebar">
+        <section className="card report-section">
+          <div className="card-header">
+            <div className="section-heading">
+              <div className="section-kicker">Outline</div>
+              <span>Report sections</span>
             </div>
           </div>
+          {outlineItems.map((item) => (
+            <button
+              key={item.view}
+              type="button"
+              className={`list-item list-item-button${
+                currentView === item.view ? " list-item-active" : ""
+              }`}
+              onClick={() => setCurrentView(item.view)}
+            >
+              <div className="flex items-center">
+                <FileText className="icon" />
+                <span className="text-sm">{item.label}</span>
+              </div>
+              {item.complete ? (
+                <CheckCircle
+                  style={{ width: 14, height: 14, color: "var(--success)" }}
+                />
+              ) : (
+                <span className="status-chip">{item.status}</span>
+              )}
+            </button>
+          ))}
+        </section>
 
-          <div ref={authMenuRef}>
-            <AuthControl
-              authEnabled={authEnabled}
-              isAuthLoading={isAuthLoading}
-              isMenuOpen={isAuthMenuOpen}
-              onOpenAuth={openAuthModal}
-              onSignOut={handleSignOut}
-              onToggleMenu={() => setIsAuthMenuOpen((open) => !open)}
-              session={session}
-            />
+        <section className="card report-section">
+          <div className="card-header">
+            <div className="section-heading">
+              <div className="section-kicker">Pipeline</div>
+              <span>Analysis progress</span>
+            </div>
+          </div>
+          <div className="card-body" style={{ padding: "8px 16px" }}>
+            {pipelineSteps.map(({ step, label }) => {
+              const isDone =
+                (step === 1 && analysis.productAnalysis !== null) ||
+                (step === 2 && analysis.competitors !== null) ||
+                (step === 3 &&
+                  !analysis.isRunning &&
+                  analysis.competitorAnalyses.length > 0 &&
+                  analysis.currentStep !== 3) ||
+                (step === 4 && analysis.insights !== null);
+              const isActive = analysis.isRunning && analysis.currentStep === step;
+              const status = isDone ? "done" : isActive ? "running" : "pending";
+
+              return (
+                <div key={step} className={`step-indicator ${status}`}>
+                  <div className="step-icon">
+                    {status === "done" ? (
+                      <CheckCircle style={{ width: 16, height: 16 }} />
+                    ) : status === "running" ? (
+                      <Loader2 className="spin" style={{ width: 16, height: 16 }} />
+                    ) : (
+                      <div className="step-icon-empty" />
+                    )}
+                  </div>
+                  <div className="step-label">
+                    {isActive ? analysis.stepLabel : label}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {analysis.errors.length > 0 && (
+          <section className="card report-section">
+            <div className="card-header">
+              <div className="section-heading">
+                <div className="section-kicker">Errors</div>
+                <span>What needs attention</span>
+              </div>
+            </div>
+            <div className="card-body">
+              {analysis.errors.map((e, index) => (
+                <div key={index} className="report-error-row">
+                  Step {e.step}: {e.message}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="dashboard-container">
+      <div className="dashboard-header">
+        <div className="dashboard-brand">
+          <div className="dashboard-brand-mark">🦸</div>
+          <div className="dashboard-brand-copy">
+            <div className="dashboard-brand-name">Friday</div>
+            <div className="dashboard-brand-subtitle">
+              Clean company intelligence, one website at a time
+            </div>
           </div>
         </div>
 
-        <div className="terminal-content">
-          <div style={{ color: "#3b82f6", marginBottom: "4px" }}>$ {terminalSessionName}</div>
-          <div style={{ color: "#eab308", marginBottom: "4px" }}>&gt; {terminalStatus}</div>
-
-          {isLocked && (
-            <div className="auth-lock-panel">
-              <div className="auth-lock-copy">
-                <div className="auth-lock-title">Authentication required</div>
-                <div className="auth-lock-text">
-                  Sign in with your email to unlock analysis tools and protected API
-                  access.
-                </div>
-              </div>
-              <button type="button" className="auth-primary-btn" onClick={openAuthModal}>
-                Sign in
-              </button>
-            </div>
-          )}
-
-          {visibleAuthError && <div className="auth-inline-error">{visibleAuthError}</div>}
-
-          <form
-            onSubmit={handleTerminalSubmit}
-            style={{ display: "flex", alignItems: "center", marginTop: "8px" }}
-          >
-            <div
-              className={analysis.isRunning ? "terminal-cursor" : ""}
-              style={{
-                width: analysis.isRunning ? 8 : 0,
-                marginRight: analysis.isRunning ? 8 : 0,
-                display: analysis.isRunning ? "inline-block" : "none",
-              }}
-            ></div>
-            {!analysis.isRunning && (
-              <span style={{ color: "#22c55e", marginRight: "8px" }}>&gt;</span>
-            )}
-            <input
-              ref={terminalInputRef}
-              type="text"
-              value={terminalInput}
-              onChange={(event) => {
-                if (!isLocked) {
-                  setTerminalInput(event.target.value);
-                  setTerminalError(null);
-                }
-              }}
-              onFocus={() => {
-                if (isLocked) {
-                  openAuthModal();
-                }
-              }}
-              disabled={isAuthLoading}
-              readOnly={isLocked}
-              placeholder={
-                isAuthLoading
-                  ? "Checking your session..."
-                  : isLocked
-                    ? "Sign in to start a protected session..."
-                    : analysis.isRunning
-                      ? "Analyzing website..."
-                      : "Paste a website URL here..."
-              }
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#f0f2f5",
-                outline: "none",
-                width: "100%",
-                fontFamily: "inherit",
-                fontSize: "inherit",
-              }}
-              autoFocus={!authEnabled}
-            />
-          </form>
+        <div ref={authMenuRef}>
+          <AuthControl
+            authEnabled={authEnabled}
+            isAuthLoading={isAuthLoading}
+            isMenuOpen={isAuthMenuOpen}
+            onOpenAuth={openAuthModal}
+            onSignOut={handleSignOut}
+            onToggleMenu={() => setIsAuthMenuOpen((open) => !open)}
+            session={session}
+          />
         </div>
       </div>
 
-      {isSiteLoaded && (
-        <div className="dashboard-grid">
-          <div className="column">
-            <div className="card">
-              <div className="card-header">
-                <div className="flex items-center gap-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={brand.favicon}
-                    alt={brand.title}
-                    style={{ width: 16, height: 16 }}
-                  />
-                  <span>{brand.title}</span>
-                </div>
-              </div>
-              <div
-                className="card-body text-sm text-muted"
-                style={{ lineHeight: 1.6 }}
-              >
-                {brand.description || "Loading brand info..."}
-              </div>
-            </div>
+      {!isSiteLoaded && (
+        <div className="landing-shell">
+          <div className="landing-grid">
+            <section className="card landing-story-card">
+              <div className="card-body landing-story-body">
+                <div className="section-kicker">Homepage</div>
+                <h1 className="landing-title">Keep the home screen clean.</h1>
+                <p className="landing-lead">
+                  Friday turns one company URL into a structured workspace. The
+                  homepage stays simple, and the deeper work opens in separate pages
+                  for report, product, competitors, voice, and strategy.
+                </p>
 
-            <div className="card">
-              <div className="card-header">Documents</div>
-              <div className="list-item">
-                <div className="flex items-center">
-                  <FileText className="icon" />
-                  <span className="text-sm">Competitor Analysis</span>
+                <div className="landing-metrics">
+                  <div className="landing-metric">
+                    <span className="landing-metric-value">5</span>
+                    <span className="landing-metric-label">focused pages</span>
+                  </div>
+                  <div className="landing-metric">
+                    <span className="landing-metric-value">1</span>
+                    <span className="landing-metric-label">homepage view</span>
+                  </div>
+                  <div className="landing-metric">
+                    <span className="landing-metric-value">0</span>
+                    <span className="landing-metric-label">unnecessary clutter</span>
+                  </div>
                 </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-              <div className="list-item">
-                <div className="flex items-center">
-                  <FileText className="icon" />
-                  <span className="text-sm">Brand Voice</span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-              <div className="list-item">
-                <div className="flex items-center">
-                  <FileText className="icon" />
-                  <span className="text-sm">Product Information</span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-              <div className="list-item">
-                <div className="flex items-center">
-                  <FileText className="icon border-0" />
-                  <span className="text-sm">
-                    Articles <span className="text-muted">(2)</span>
-                  </span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-            </div>
 
-            <div className="card">
-              <div className="card-header">
-                <span>Competitors</span>
-                {competitorError && (
-                  <button
-                    type="button"
-                    onClick={retryCompetitorDiscovery}
-                    style={{
-                      background: "var(--card-hover)",
-                      color: "var(--ink)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      padding: "4px 8px",
-                      cursor: "pointer",
-                      fontSize: "0.75rem",
-                    }}
-                  >
-                    Retry
-                  </button>
-                )}
-              </div>
-              <div className="card-body">
-                {isDiscoveringCompetitors && competitors.length === 0 && (
-                  <div
-                    className="flex items-center gap-2 text-muted text-sm"
-                    style={{ marginBottom: 8 }}
-                  >
-                    <Loader2
-                      className="spin"
-                      style={{ width: 14, height: 14 }}
-                    />
-                    Fetching live competitor data...
-                  </div>
-                )}
-                {competitorError && (
-                  <div
-                    className="text-sm"
-                    style={{ marginBottom: 12, lineHeight: 1.6, color: "var(--danger)" }}
-                  >
-                    {competitorError}
-                  </div>
-                )}
-                {competitors.length === 0 && !isDiscoveringCompetitors && (
-                  <div className="text-sm text-muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
-                    No competitors loaded yet. Add a domain manually or let Friday
-                    discover them from the current site.
-                  </div>
-                )}
-                <div className="competitor-list">
-                  {competitors.map((competitor) => (
-                    <div key={competitor.domain} className="competitor-item">
-                      <div className="competitor-item-button">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={competitor.logo || getCompetitorLogo(competitor.domain)}
-                          alt={competitor.name}
-                          style={{ width: 18, height: 18, borderRadius: 4 }}
-                        />
-                        <div className="competitor-copy">
-                          <div className="competitor-copy-header">
-                            <span className="competitor-name">{competitor.name}</span>
-                            <span className="competitor-domain">{competitor.domain}</span>
-                          </div>
-                          <div className="competitor-reason">{competitor.reason}</div>
-                          {competitor.positioning && (
-                            <div className="competitor-positioning">
-                              {competitor.positioning}
-                            </div>
-                          )}
-                        </div>
+                <div className="landing-outline-list">
+                  {landingSections.map((section) => (
+                    <div key={section.label} className="landing-outline-item">
+                      <div className="landing-outline-icon">
+                        <FileText className="icon" />
                       </div>
-                      <button
-                        type="button"
-                        className="competitor-remove-btn"
-                        aria-label={`Remove ${competitor.domain}`}
-                        onClick={() => removeCompetitor(competitor.domain)}
-                      >
-                        <X style={{ width: 12, height: 12 }} />
-                      </button>
+                      <div className="landing-outline-copy">
+                        <div className="landing-outline-title">{section.label}</div>
+                        <div className="landing-outline-note">{section.note}</div>
+                      </div>
                     </div>
                   ))}
                 </div>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    addCompetitor(competitorInput);
-                    setCompetitorInput("");
-                  }}
-                  style={{ marginTop: competitors.length > 0 ? 12 : 8 }}
-                >
-                  <input
-                    type="text"
-                    placeholder="Add competitor domain or URL..."
-                    value={competitorInput}
-                    onChange={(e) => setCompetitorInput(e.target.value)}
-                    style={{
-                      width: "100%",
-                      fontSize: "0.8rem",
-                      padding: "6px 10px",
-                      background: "var(--bg)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      outline: "none",
-                    }}
-                  />
-                </form>
               </div>
-            </div>
-          </div>
+            </section>
 
-          <div className="column">
-            {/* Pipeline progress */}
-            <div className="card">
-              <div className="card-header">Analysis Pipeline</div>
-              <div className="card-body" style={{ padding: "8px 16px" }}>
-                {[
-                  { step: 1, label: "Product Analysis" },
-                  { step: 2, label: "Competitor Discovery" },
-                  { step: 3, label: "Competitor Analysis" },
-                  { step: 4, label: "Strategic Insights" },
-                ].map(({ step, label }) => {
-                  const isDone =
-                    (step === 1 && analysis.productAnalysis !== null) ||
-                    (step === 2 && analysis.competitors !== null) ||
-                    (step === 3 && !analysis.isRunning && analysis.competitorAnalyses.length > 0 && analysis.currentStep !== 3) ||
-                    (step === 4 && analysis.insights !== null);
-                  const isActive = analysis.isRunning && analysis.currentStep === step;
-                  const status = isDone ? "done" : isActive ? "running" : "pending";
+            <section className="card landing-input-card">
+              <div className="card-body landing-input-body">
+                <div className="section-kicker">Start Here</div>
+                <div className="landing-panel-title">Paste a company website</div>
+                <p className="landing-panel-copy">
+                  Friday will build the workspace, load the report structure, and
+                  keep the rest of the analysis organized in dedicated pages.
+                </p>
 
-                  return (
-                    <div key={step} className={`step-indicator ${status}`}>
-                      <div className="step-icon">
-                        {status === "done" ? (
-                          <CheckCircle style={{ width: 16, height: 16 }} />
-                        ) : status === "running" ? (
-                          <Loader2 className="spin" style={{ width: 16, height: 16 }} />
-                        ) : (
-                          <div
-                            style={{
-                              width: 16,
-                              height: 16,
-                              borderRadius: "50%",
-                              border: "2px solid var(--border)",
-                            }}
-                          />
-                        )}
-                      </div>
-                      <div className="step-label">
-                        {isActive ? analysis.stepLabel : label}
+                {isLocked && (
+                  <div className="auth-lock-panel">
+                    <div className="auth-lock-copy">
+                      <div className="auth-lock-title">Authentication required</div>
+                      <div className="auth-lock-text">
+                        Sign in with your email to unlock analysis tools and
+                        protected API access.
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Product Analysis */}
-            {analysis.productAnalysis && (
-              <div className="card">
-                <div className="card-header">Product Analysis</div>
-                <div className="card-body">
-                  <div className="font-semibold text-sm">
-                    {analysis.productAnalysis.brandName}
+                    <button type="button" className="auth-primary-btn" onClick={openAuthModal}>
+                      Sign in
+                    </button>
                   </div>
-                  <div className="text-xs text-muted" style={{ marginTop: 4 }}>
-                    {analysis.productAnalysis.oneLiner}
-                  </div>
-                  <div className="text-xs" style={{ marginTop: 8, color: "var(--ink)", lineHeight: 1.6 }}>
-                    {analysis.productAnalysis.positioning}
-                  </div>
+                )}
 
-                  {analysis.productAnalysis.targetAudience.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Target Audience
-                      </div>
-                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
-                        {analysis.productAnalysis.targetAudience.map((a) => (
-                          <span key={a} className="analysis-tag">{a}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                {visibleAuthError && <div className="auth-inline-error">{visibleAuthError}</div>}
 
-                  {analysis.productAnalysis.painPoints.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Pain Points Addressed
-                      </div>
-                      {analysis.productAnalysis.painPoints.map((p) => (
-                        <div key={p} className="analysis-list-item">{p}</div>
-                      ))}
-                    </div>
-                  )}
-
-                  {analysis.productAnalysis.differentiators.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Differentiators
-                      </div>
-                      {analysis.productAnalysis.differentiators.map((d) => (
-                        <div key={d} className="analysis-list-item">{d}</div>
-                      ))}
-                    </div>
-                  )}
-
-                  {analysis.productAnalysis.brandVoice.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Brand Voice
-                      </div>
-                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
-                        {analysis.productAnalysis.brandVoice.map((v) => (
-                          <span key={v} className="analysis-tag">{v}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Competitors Found */}
-            {analysis.competitors && analysis.competitors.length > 0 && (
-              <div className="card">
-                <div className="card-header">
-                  Competitors Found
-                  <span className="text-xs text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>
-                    {analysis.competitors.length}
-                  </span>
-                </div>
-                <div className="card-body" style={{ padding: "4px 16px" }}>
-                  {analysis.competitors.map((c) => (
-                    <div
-                      key={c.domain}
-                      className="flex items-center gap-2"
-                      style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={c.logo || `https://www.google.com/s2/favicons?domain=${c.domain}&sz=32`}
-                        alt=""
-                        style={{ width: 20, height: 20, borderRadius: 4, flexShrink: 0 }}
-                      />
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div className="text-sm font-semibold" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {c.name}
-                        </div>
-                        <div className="text-xs text-muted">{c.domain}</div>
-                      </div>
-                      {c.positioning && (
-                        <div className="text-xs text-muted" style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>
-                          {c.positioning}
-                        </div>
+                <form onSubmit={handleTerminalSubmit} className="landing-form">
+                  <label className="landing-field-label" htmlFor="site-url-input">
+                    Website URL
+                  </label>
+                  <div className="workspace-input-shell workspace-input-shell-large">
+                    <div className="workspace-input-prefix">
+                      {analysis.isRunning ? (
+                        <span className="terminal-cursor" />
+                      ) : (
+                        <span>&gt;</span>
                       )}
                     </div>
-                  ))}
+                    <input
+                      id="site-url-input"
+                      ref={terminalInputRef}
+                      type="text"
+                      value={terminalInput}
+                      onChange={(event) => {
+                        if (!isLocked) {
+                          setTerminalInput(event.target.value);
+                          setTerminalError(null);
+                        }
+                      }}
+                      onFocus={() => {
+                        if (isLocked) {
+                          openAuthModal();
+                        }
+                      }}
+                      disabled={isAuthLoading}
+                      readOnly={isLocked}
+                      placeholder={
+                        isAuthLoading
+                          ? "Checking your session..."
+                          : isLocked
+                            ? "Sign in to start a protected session..."
+                            : analysis.isRunning
+                              ? "Analyzing website..."
+                              : "https://company.com"
+                      }
+                      className="workspace-input"
+                      autoFocus={!authEnabled}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="auth-primary-btn landing-submit-button"
+                    disabled={isAuthLoading || analysis.isRunning}
+                  >
+                    {analysis.isRunning ? "Analyzing..." : "Open workspace"}
+                  </button>
+                </form>
+
+                <div className="landing-example-block">
+                  <div className="landing-example-label">Try an example</div>
+                  <div className="landing-example-list">
+                    {landingExamples.map((example) => (
+                      <button
+                        key={example}
+                        type="button"
+                        className="landing-example-chip"
+                        onClick={() => {
+                          if (isLocked) {
+                            openAuthModal();
+                            return;
+                          }
+                          setTerminalInput(example);
+                          setTerminalError(null);
+                          terminalInputRef.current?.focus();
+                        }}
+                      >
+                        {example.replace(/^https?:\/\//, "")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="landing-status-line">
+                  <span className="landing-status-label">Status</span>
+                  <span>{terminalStatus}</span>
                 </div>
               </div>
-            )}
+            </section>
+          </div>
+        </div>
+      )}
 
-            {/* Competitor Analyses */}
-            {analysis.competitorAnalyses.map((ca) => (
-              <div key={ca.domain} className="card">
-                <div className="card-header">
-                  <span>{ca.name}</span>
-                  <span className="text-xs text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>
-                    {ca.domain}
+      {isSiteLoaded && (
+        <div className="workspace-bar card">
+          <div className="card-body workspace-bar-body">
+            <div className="workspace-bar-copy">
+              <div className="section-kicker">Current Workspace</div>
+              <div className="workspace-bar-title">{terminalSessionName}</div>
+              <p className="workspace-bar-text">
+                Switch the website here without changing the cleaner report layout.
+              </p>
+            </div>
+
+            <div className="workspace-bar-controls">
+              {isLocked && (
+                <div className="auth-lock-panel">
+                  <div className="auth-lock-copy">
+                    <div className="auth-lock-title">Authentication required</div>
+                    <div className="auth-lock-text">
+                      Sign in with your email to unlock analysis tools and protected
+                      API access.
+                    </div>
+                  </div>
+                  <button type="button" className="auth-primary-btn" onClick={openAuthModal}>
+                    Sign in
+                  </button>
+                </div>
+              )}
+
+              {visibleAuthError && <div className="auth-inline-error">{visibleAuthError}</div>}
+
+              <form onSubmit={handleTerminalSubmit} className="workspace-bar-form">
+                <div className="workspace-input-shell">
+                  <div className="workspace-input-prefix">
+                    {analysis.isRunning ? (
+                      <span className="terminal-cursor" />
+                    ) : (
+                      <span>&gt;</span>
+                    )}
+                  </div>
+                  <input
+                    ref={terminalInputRef}
+                    type="text"
+                    value={terminalInput}
+                    onChange={(event) => {
+                      if (!isLocked) {
+                        setTerminalInput(event.target.value);
+                        setTerminalError(null);
+                      }
+                    }}
+                    onFocus={() => {
+                      if (isLocked) {
+                        openAuthModal();
+                      }
+                    }}
+                    disabled={isAuthLoading}
+                    readOnly={isLocked}
+                    placeholder={
+                      isAuthLoading
+                        ? "Checking your session..."
+                        : isLocked
+                          ? "Sign in to start a protected session..."
+                          : analysis.isRunning
+                            ? "Analyzing website..."
+                            : "Paste another website URL..."
+                    }
+                    className="workspace-input"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="auth-primary-btn workspace-submit-button"
+                  disabled={isAuthLoading || analysis.isRunning}
+                >
+                  {analysis.isRunning ? "Running..." : "Update"}
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && currentView === "home" && (
+        <div className="report-shell report-shell-home">
+          <section className="card report-hero">
+            <div className="card-body report-hero-grid">
+              <div className="report-hero-copy">
+                <div className="section-kicker">Homepage Summary</div>
+                <div className="report-brand-row">
+                  <div className="report-brand-mark">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={brand.favicon}
+                      alt={brand.title}
+                      style={{ width: 22, height: 22 }}
+                    />
+                  </div>
+                  <div>
+                    <h1 className="report-title">{brand.title}</h1>
+                    <p className="report-lead">
+                      {brand.description ||
+                        "Friday is organizing the company summary into dedicated pages so the homepage stays clean."}
+                    </p>
+                  </div>
+                </div>
+                <div className="report-meta-row">
+                  <span className="status-chip status-chip-accent">{currentDomain}</span>
+                  <span className="status-chip">
+                    {analysis.isRunning ? analysis.stepLabel : "Overview ready"}
                   </span>
                 </div>
-                <div className="card-body">
-                  <div className="text-xs" style={{ color: "var(--ink)", lineHeight: 1.6 }}>
-                    {ca.positioning}
+              </div>
+
+              <div className="report-metrics">
+                <div className="metric-card">
+                  <div className="metric-label">Competitors</div>
+                  <div className="metric-value">{competitors.length}</div>
+                  <div className="metric-note">Tracked brands</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Product</div>
+                  <div className="metric-value">
+                    {analysis.productAnalysis ? "Ready" : analysis.isRunning ? "Running" : "Pending"}
                   </div>
+                  <div className="metric-note">Positioning summary</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Brand Voice</div>
+                  <div className="metric-value">
+                    {brandVoiceDoc ? "Ready" : isBrandVoiceLoading ? "Drafting" : "Pending"}
+                  </div>
+                  <div className="metric-note">Voice guide status</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">Insights</div>
+                  <div className="metric-value">{insightCount}</div>
+                  <div className="metric-note">Strategy notes</div>
+                </div>
+              </div>
+            </div>
+          </section>
 
-                  {ca.strengths.length > 0 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Strengths
-                      </div>
-                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
-                        {ca.strengths.map((s) => (
-                          <span key={s} className="analysis-tag strength-tag">{s}</span>
+          <div className="report-home-layout">
+            <div className="report-main">
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Overview</div>
+                    <span>Company snapshot</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  <div className="report-fact-grid">
+                    <div className="fact-card">
+                      <span className="fact-label">Website</span>
+                      <a
+                        href={currentSiteUrl ?? "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="fact-value"
+                      >
+                        {currentSiteUrl}
+                      </a>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Status</span>
+                      <span className="fact-value">
+                        {analysis.isRunning ? "Analysis in progress" : "Ready to review"}
+                      </span>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Competitor coverage</span>
+                      <span className="fact-value">
+                        {competitors.length > 0
+                          ? `${competitors.length} brands discovered`
+                          : "No competitors loaded yet"}
+                      </span>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Brand voice</span>
+                      <span className="fact-value">
+                        {brandVoiceDoc ? "Generated and attached" : "Not generated yet"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <div className="report-preview-grid">
+                <button
+                  type="button"
+                  className="card report-preview-card"
+                  onClick={() => setCurrentView("product-information")}
+                >
+                  <div className="card-header">
+                    <div className="section-heading">
+                      <div className="section-kicker">Product</div>
+                      <span>Product information</span>
+                    </div>
+                    <ChevronRight style={{ width: 16, height: 16, color: "var(--muted)" }} />
+                  </div>
+                  <div className="card-body">
+                    <p className="report-copy">
+                      {analysis.productAnalysis?.positioning ||
+                        "Open the product page to review positioning, audience, differentiators, and voice signals."}
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  className="card report-preview-card"
+                  onClick={() => setCurrentView("competitor-analysis")}
+                >
+                  <div className="card-header">
+                    <div className="section-heading">
+                      <div className="section-kicker">Landscape</div>
+                      <span>Competitor analysis</span>
+                    </div>
+                    <ChevronRight style={{ width: 16, height: 16, color: "var(--muted)" }} />
+                  </div>
+                  <div className="card-body">
+                    {competitors.length > 0 ? (
+                      <div className="report-preview-stack">
+                        {competitors.slice(0, 3).map((competitor) => (
+                          <div key={competitor.domain} className="report-preview-row">
+                            <span className="font-semibold text-sm">{competitor.name}</span>
+                            <span className="text-xs text-muted">{competitor.domain}</span>
+                          </div>
                         ))}
                       </div>
+                    ) : (
+                      <p className="report-copy">
+                        Open the competitor page to review the discovered brands and full analysis.
+                      </p>
+                    )}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  className="card report-preview-card"
+                  onClick={() => setCurrentView("brand-voice")}
+                >
+                  <div className="card-header">
+                    <div className="section-heading">
+                      <div className="section-kicker">Messaging</div>
+                      <span>Brand voice</span>
+                    </div>
+                    <ChevronRight style={{ width: 16, height: 16, color: "var(--muted)" }} />
+                  </div>
+                  <div className="card-body">
+                    <p className="report-copy">
+                      {brandVoiceDoc?.identity ||
+                        "Generate and review the full voice guide on its own page so the homepage stays uncluttered."}
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  className="card report-preview-card"
+                  onClick={() => setCurrentView("strategic-insights")}
+                >
+                  <div className="card-header">
+                    <div className="section-heading">
+                      <div className="section-kicker">Strategy</div>
+                      <span>Strategic insights</span>
+                    </div>
+                    <ChevronRight style={{ width: 16, height: 16, color: "var(--muted)" }} />
+                  </div>
+                  <div className="card-body">
+                    {analysis.insights ? (
+                      <div className="report-preview-stack">
+                        {analysis.insights.opportunities.slice(0, 2).map((item) => (
+                          <div key={item} className="analysis-list-item">{item}</div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="report-copy">
+                        Open the strategic insights page to review opportunities, gaps, and recommendations.
+                      </p>
+                    )}
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {renderSidebar()}
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && currentView === "company-report" && (
+        <div className="report-shell">
+          <div className="detail-page-layout">
+            <div className="report-main">
+              <button
+                type="button"
+                className="back-button"
+                onClick={() => setCurrentView("home")}
+              >
+                <ArrowLeft style={{ width: 16, height: 16 }} />
+                <span>Back to home</span>
+              </button>
+
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Overview</div>
+                    <span>Company report</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  <p className="report-copy">
+                    This page holds the company-level summary so the home screen stays
+                    concise. Use it for the top-level website context, report status,
+                    and operational summary.
+                  </p>
+
+                  <div className="report-fact-grid" style={{ marginTop: 18 }}>
+                    <div className="fact-card">
+                      <span className="fact-label">Website</span>
+                      <a
+                        href={currentSiteUrl ?? "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="fact-value"
+                      >
+                        {currentSiteUrl}
+                      </a>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Domain</span>
+                      <span className="fact-value">{currentDomain}</span>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Current status</span>
+                      <span className="fact-value">
+                        {analysis.isRunning ? "Analysis in progress" : "Ready to review"}
+                      </span>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Competitor coverage</span>
+                      <span className="fact-value">
+                        {competitors.length > 0
+                          ? `${competitors.length} brands discovered`
+                          : "No competitors loaded yet"}
+                      </span>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Product view</span>
+                      <span className="fact-value">
+                        {analysis.productAnalysis ? "Generated" : "Pending"}
+                      </span>
+                    </div>
+                    <div className="fact-card">
+                      <span className="fact-label">Brand voice</span>
+                      <span className="fact-value">
+                        {brandVoiceDoc ? "Generated and attached" : "Not generated yet"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            {renderSidebar()}
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && currentView === "product-information" && (
+        <div className="report-shell">
+          <div className="detail-page-layout">
+            <div className="report-main">
+              <button
+                type="button"
+                className="back-button"
+                onClick={() => setCurrentView("home")}
+              >
+                <ArrowLeft style={{ width: 16, height: 16 }} />
+                <span>Back to home</span>
+              </button>
+
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Product</div>
+                    <span>Product information</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  {!analysis.productAnalysis && (
+                    <div className="report-empty">
+                      {analysis.isRunning
+                        ? "Friday is still reading the product and extracting the positioning."
+                        : "No product analysis available yet. Load a site to generate it."}
                     </div>
                   )}
 
-                  {ca.weaknesses.length > 0 && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Weaknesses
+                  {analysis.productAnalysis && (
+                    <>
+                      <div className="report-summary-block">
+                        <div className="font-semibold text-sm">
+                          {analysis.productAnalysis.brandName}
+                        </div>
+                        <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                          {analysis.productAnalysis.oneLiner}
+                        </div>
+                        <div
+                          className="text-sm"
+                          style={{ marginTop: 10, color: "var(--ink)", lineHeight: 1.7 }}
+                        >
+                          {analysis.productAnalysis.positioning}
+                        </div>
                       </div>
-                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
-                        {ca.weaknesses.map((w) => (
-                          <span key={w} className="analysis-tag weakness-tag">{w}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
 
-                  {ca.contentStrategy && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Content Strategy
-                      </div>
-                      <div className="text-xs" style={{ color: "var(--ink)", lineHeight: 1.5 }}>
-                        <strong>Tone:</strong> {ca.contentStrategy.tone}
-                        {ca.contentStrategy.cadence && (
-                          <> &middot; <strong>Cadence:</strong> {ca.contentStrategy.cadence}</>
-                        )}
-                      </div>
-                      {ca.contentStrategy.channels.length > 0 && (
-                        <div className="flex" style={{ flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-                          {ca.contentStrategy.channels.map((ch) => (
-                            <span key={ch} className="analysis-tag">{ch}</span>
+                      {analysis.productAnalysis.targetAudience.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Target Audience
+                          </div>
+                          <div className="flex" style={{ flexWrap: "wrap", gap: 6 }}>
+                            {analysis.productAnalysis.targetAudience.map((a) => (
+                              <span key={a} className="analysis-tag">{a}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {analysis.productAnalysis.painPoints.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Pain Points Addressed
+                          </div>
+                          {analysis.productAnalysis.painPoints.map((p) => (
+                            <div key={p} className="analysis-list-item">{p}</div>
                           ))}
                         </div>
                       )}
-                    </div>
-                  )}
 
-                  {ca.pricingModel && (
-                    <div style={{ marginTop: 10 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 4 }}>
-                        Pricing
-                      </div>
-                      <div className="text-xs" style={{ color: "var(--ink)" }}>
-                        {ca.pricingModel}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
+                      {analysis.productAnalysis.differentiators.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Differentiators
+                          </div>
+                          {analysis.productAnalysis.differentiators.map((d) => (
+                            <div key={d} className="analysis-list-item">{d}</div>
+                          ))}
+                        </div>
+                      )}
 
-            {/* Competitive Insights */}
-            {analysis.insights && (
-              <div className="card">
-                <div className="card-header">Competitive Insights</div>
-                <div className="card-body">
-                  {analysis.insights.opportunities.length > 0 && (
-                    <div>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Opportunities
-                      </div>
-                      {analysis.insights.opportunities.map((o) => (
-                        <div key={o} className="analysis-list-item">{o}</div>
-                      ))}
-                    </div>
-                  )}
-
-                  {analysis.insights.gaps.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Competitive Gaps
-                      </div>
-                      {analysis.insights.gaps.map((g) => (
-                        <div key={g} className="analysis-list-item">{g}</div>
-                      ))}
-                    </div>
-                  )}
-
-                  {analysis.insights.recommendations.length > 0 && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Recommendations
-                      </div>
-                      {analysis.insights.recommendations.map((r) => (
-                        <div key={r} className="analysis-list-item">{r}</div>
-                      ))}
-                    </div>
-                  )}
-
-                  {analysis.insights.positioningAdvice && (
-                    <div style={{ marginTop: 12 }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
-                        Positioning Advice
-                      </div>
-                      <div className="text-xs" style={{ color: "var(--ink)", lineHeight: 1.6 }}>
-                        {analysis.insights.positioningAdvice}
-                      </div>
-                    </div>
+                      {analysis.productAnalysis.brandVoice.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Brand Voice Signals
+                          </div>
+                          <div className="flex" style={{ flexWrap: "wrap", gap: 6 }}>
+                            {analysis.productAnalysis.brandVoice.map((v) => (
+                              <span key={v} className="analysis-tag">{v}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
-              </div>
-            )}
+              </section>
+            </div>
 
-            {/* Errors */}
-            {analysis.errors.length > 0 && (
-              <div className="card">
-                <div className="card-header" style={{ color: "var(--danger)" }}>
-                  Errors
-                </div>
-                <div className="card-body">
-                  {analysis.errors.map((e, i) => (
-                    <div key={i} className="text-xs" style={{ color: "var(--danger)", padding: "4px 0" }}>
-                      Step {e.step}: {e.message}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {renderSidebar()}
           </div>
+        </div>
+      )}
 
+      {isSiteLoaded && currentView === "competitor-analysis" && (
+        <div className="report-shell">
+          <div className="detail-page-layout">
+            <div className="report-main">
+              <button
+                type="button"
+                className="back-button"
+                onClick={() => setCurrentView("home")}
+              >
+                <ArrowLeft style={{ width: 16, height: 16 }} />
+                <span>Back to home</span>
+              </button>
+
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Landscape</div>
+                    <span>Competitor analysis</span>
+                  </div>
+                  {competitorError && (
+                    <button
+                      type="button"
+                      onClick={retryCompetitorDiscovery}
+                      className="secondary-inline-button"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+                <div className="card-body">
+                  {isDiscoveringCompetitors && competitors.length === 0 && (
+                    <div className="flex items-center gap-2 text-muted text-sm" style={{ marginBottom: 10 }}>
+                      <Loader2 className="spin" style={{ width: 14, height: 14 }} />
+                      Fetching live competitor data...
+                    </div>
+                  )}
+
+                  {competitorError && (
+                    <div className="report-error">{competitorError}</div>
+                  )}
+
+                  {!isDiscoveringCompetitors && competitors.length === 0 && !competitorError && (
+                    <div className="report-empty">
+                      No competitors loaded yet. Add a domain manually or let Friday
+                      discover them from the current site.
+                    </div>
+                  )}
+
+                  {competitors.length > 0 && (
+                    <div className="competitor-list">
+                      {competitors.map((competitor) => (
+                        <div key={competitor.domain} className="competitor-item">
+                          <div className="competitor-item-button">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={competitor.logo || getCompetitorLogo(competitor.domain)}
+                              alt={competitor.name}
+                              style={{ width: 18, height: 18, borderRadius: 4 }}
+                            />
+                            <div className="competitor-copy">
+                              <div className="competitor-copy-header">
+                                <span className="competitor-name">{competitor.name}</span>
+                                <span className="competitor-domain">{competitor.domain}</span>
+                              </div>
+                              <div className="competitor-reason">{competitor.reason}</div>
+                              {competitor.positioning && (
+                                <div className="competitor-positioning">
+                                  {competitor.positioning}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="competitor-remove-btn"
+                            aria-label={`Remove ${competitor.domain}`}
+                            onClick={() => removeCompetitor(competitor.domain)}
+                          >
+                            <X style={{ width: 12, height: 12 }} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      addCompetitor(competitorInput);
+                      setCompetitorInput("");
+                    }}
+                    style={{ marginTop: 14 }}
+                  >
+                    <input
+                      type="text"
+                      placeholder="Add competitor domain or URL..."
+                      value={competitorInput}
+                      onChange={(event) => setCompetitorInput(event.target.value)}
+                      className="report-input"
+                    />
+                  </form>
+
+                  {analysis.competitorAnalyses.length > 0 && (
+                    <div style={{ marginTop: 18 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 10 }}>
+                        Detailed competitor reads
+                      </div>
+                      {analysis.competitorAnalyses.map((ca) => (
+                        <div key={ca.domain} className="report-subcard">
+                          <div className="report-subcard-header">
+                            <div>
+                              <div className="font-semibold text-sm">{ca.name}</div>
+                              <div className="text-xs text-muted">{ca.domain}</div>
+                            </div>
+                          </div>
+                          <div className="text-sm" style={{ lineHeight: 1.7 }}>
+                            {ca.positioning}
+                          </div>
+
+                          {ca.strengths.length > 0 && (
+                            <div style={{ marginTop: 14 }}>
+                              <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                                Strengths
+                              </div>
+                              <div className="flex" style={{ flexWrap: "wrap", gap: 6 }}>
+                                {ca.strengths.map((s) => (
+                                  <span key={s} className="analysis-tag strength-tag">{s}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {ca.weaknesses.length > 0 && (
+                            <div style={{ marginTop: 14 }}>
+                              <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                                Weaknesses
+                              </div>
+                              <div className="flex" style={{ flexWrap: "wrap", gap: 6 }}>
+                                {ca.weaknesses.map((w) => (
+                                  <span key={w} className="analysis-tag weakness-tag">{w}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {ca.contentStrategy && (
+                            <div style={{ marginTop: 14 }}>
+                              <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                                Content Strategy
+                              </div>
+                              <div className="text-sm" style={{ lineHeight: 1.7 }}>
+                                <strong>Tone:</strong> {ca.contentStrategy.tone}
+                                {ca.contentStrategy.cadence && (
+                                  <> · <strong>Cadence:</strong> {ca.contentStrategy.cadence}</>
+                                )}
+                              </div>
+                              {ca.contentStrategy.channels.length > 0 && (
+                                <div className="flex" style={{ flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                                  {ca.contentStrategy.channels.map((ch) => (
+                                    <span key={ch} className="analysis-tag">{ch}</span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {ca.pricingModel && (
+                            <div style={{ marginTop: 14 }}>
+                              <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                                Pricing
+                              </div>
+                              <div className="text-sm">{ca.pricingModel}</div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {renderSidebar()}
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && currentView === "brand-voice" && (
+        <div className="report-shell">
+          <div className="detail-page-layout">
+            <div className="report-main">
+              <button
+                type="button"
+                className="back-button"
+                onClick={() => setCurrentView("home")}
+              >
+                <ArrowLeft style={{ width: 16, height: 16 }} />
+                <span>Back to home</span>
+              </button>
+
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Messaging</div>
+                    <span>Brand voice</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  {!brandVoiceDoc && !isBrandVoiceLoading && !brandVoiceError && (
+                    <div className="report-empty">
+                      <div style={{ marginBottom: 14 }}>
+                        Generate a brand voice document based on the website content.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={generateBrandVoice}
+                        className="primary-inline-button"
+                      >
+                        Generate Brand Voice
+                      </button>
+                    </div>
+                  )}
+
+                  {isBrandVoiceLoading && (
+                    <div className="flex items-center gap-2 text-muted text-sm">
+                      <Loader2 className="spin" style={{ width: 16, height: 16 }} />
+                      Generating brand voice...
+                    </div>
+                  )}
+
+                  {brandVoiceError && (
+                    <div className="report-error">
+                      {brandVoiceError}
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          onClick={generateBrandVoice}
+                          className="secondary-inline-button"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {brandVoiceDoc && (
+                    <>
+                      <div className="report-quote-block">
+                        &ldquo;{brandVoiceDoc.identity}&rdquo;
+                      </div>
+
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8, fontWeight: 700 }}>
+                          Voice Principles
+                        </div>
+                        {brandVoiceDoc.principles.map((p) => (
+                          <div key={p.label} className="report-subcard">
+                            <div className="text-sm font-semibold">{p.label}</div>
+                            <div className="text-sm text-muted" style={{ marginTop: 4, lineHeight: 1.7 }}>
+                              {p.explanation}
+                            </div>
+                            <div className="report-example-block">{p.example}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8, fontWeight: 700 }}>
+                          Tone Spectrum
+                        </div>
+                        {brandVoiceDoc.toneSpectrum.map((t) => (
+                          <div key={t.context} className="report-subcard">
+                            <div className="text-sm">
+                              <span className="font-semibold">{t.context}</span>
+                              <span className="text-muted" style={{ marginLeft: 6 }}>
+                                {t.tone}
+                              </span>
+                            </div>
+                            <div className="report-example-block">{t.example}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="report-dual-list">
+                        <div className="report-list-column">
+                          <div className="report-list-title report-list-title-do">Do</div>
+                          {brandVoiceDoc.dos.map((d) => (
+                            <div key={d} className="report-rule report-rule-do">{d}</div>
+                          ))}
+                        </div>
+                        <div className="report-list-column">
+                          <div className="report-list-title report-list-title-dont">Don&apos;t</div>
+                          {brandVoiceDoc.donts.map((d) => (
+                            <div key={d} className="report-rule report-rule-dont">{d}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: 18 }}>
+                        <div className="text-xs text-muted" style={{ marginBottom: 8, fontWeight: 700 }}>
+                          Voice in Action
+                        </div>
+                        {brandVoiceDoc.rewrites.map((r) => (
+                          <div key={r.generic} className="report-subcard">
+                            <div className="report-strike-copy">{r.generic}</div>
+                            <div className="report-rewrite-copy">{r.rewritten}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {renderSidebar()}
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && currentView === "strategic-insights" && (
+        <div className="report-shell">
+          <div className="detail-page-layout">
+            <div className="report-main">
+              <button
+                type="button"
+                className="back-button"
+                onClick={() => setCurrentView("home")}
+              >
+                <ArrowLeft style={{ width: 16, height: 16 }} />
+                <span>Back to home</span>
+              </button>
+
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Strategy</div>
+                    <span>Strategic insights</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  {!analysis.insights && (
+                    <div className="report-empty">
+                      {analysis.isRunning
+                        ? "Friday is still pulling together the strategic takeaways."
+                        : "No strategic insights yet. They will appear here after the analysis finishes."}
+                    </div>
+                  )}
+
+                  {analysis.insights && (
+                    <>
+                      {analysis.insights.opportunities.length > 0 && (
+                        <div>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Opportunities
+                          </div>
+                          {analysis.insights.opportunities.map((o) => (
+                            <div key={o} className="analysis-list-item">{o}</div>
+                          ))}
+                        </div>
+                      )}
+
+                      {analysis.insights.gaps.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Competitive Gaps
+                          </div>
+                          {analysis.insights.gaps.map((g) => (
+                            <div key={g} className="analysis-list-item">{g}</div>
+                          ))}
+                        </div>
+                      )}
+
+                      {analysis.insights.recommendations.length > 0 && (
+                        <div style={{ marginTop: 18 }}>
+                          <div className="text-xs text-muted" style={{ marginBottom: 8 }}>
+                            Recommendations
+                          </div>
+                          {analysis.insights.recommendations.map((r) => (
+                            <div key={r} className="analysis-list-item">{r}</div>
+                          ))}
+                        </div>
+                      )}
+
+                      {analysis.insights.positioningAdvice && (
+                        <div className="report-quote-block" style={{ marginTop: 18 }}>
+                          {analysis.insights.positioningAdvice}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {renderSidebar()}
+          </div>
         </div>
       )}
 

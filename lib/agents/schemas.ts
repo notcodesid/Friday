@@ -142,6 +142,38 @@ export const competitiveInsightsSchema = z.object({
 });
 
 /* ------------------------------------------------------------------ */
+/*  Brand Voice document schema                                        */
+/* ------------------------------------------------------------------ */
+
+export const brandVoicePrincipleSchema = z.object({
+  label: z.string().describe("Short name, e.g. 'Direct over clever'"),
+  explanation: z.string().describe("Why this matters for the brand"),
+  example: z.string().describe("A sample sentence written in this principle"),
+});
+
+export const brandVoiceToneContextSchema = z.object({
+  context: z.string().describe("Where this tone applies, e.g. 'Onboarding emails'"),
+  tone: z.string().describe("How the voice shifts here"),
+  example: z.string().describe("A sample line in this tone"),
+});
+
+export const brandVoiceRewriteSchema = z.object({
+  generic: z.string().describe("A generic marketing line"),
+  rewritten: z.string().describe("The same line rewritten in the brand voice"),
+});
+
+export const brandVoiceDocSchema = z.object({
+  identity: z.string().describe("One-line voice identity, e.g. 'A sharp friend who won't sugarcoat it'"),
+  principles: z.array(brandVoicePrincipleSchema).min(3).max(4),
+  toneSpectrum: z.array(brandVoiceToneContextSchema).min(3).max(5),
+  dos: z.array(z.string()).min(3).max(6),
+  donts: z.array(z.string()).min(3).max(6),
+  rewrites: z.array(brandVoiceRewriteSchema).min(2).max(3),
+});
+
+export type BrandVoiceDoc = z.infer<typeof brandVoiceDocSchema>;
+
+/* ------------------------------------------------------------------ */
 /*  Inferred types                                                     */
 /* ------------------------------------------------------------------ */
 
