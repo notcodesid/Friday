@@ -1,25 +1,16 @@
 import { NextResponse } from "next/server";
 
 import type { FridayContext } from "@/lib/agents/core/context";
-import { runAgentStream } from "@/lib/agents/core/runner";
-import { cmoAgent } from "@/lib/agents/cmo";
-import { competitorAnalystAgent } from "@/lib/agents/competitor-analyst";
-import { contentStrategistAgent } from "@/lib/agents/content-strategist";
+import { runFridayChat, type FridayAgentId } from "@/lib/agents/friday";
 import { requireSession } from "@/lib/auth/session";
 import { hasAI } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const agents: Record<string, typeof cmoAgent> = {
-  cmo: cmoAgent,
-  "content-strategist": contentStrategistAgent,
-  "competitor-analyst": competitorAnalystAgent,
-};
-
 type ChatRequest = {
   message: string;
-  agentId?: string;
+  agentId?: FridayAgentId;
   brandContext?: FridayContext;
 };
 
@@ -50,11 +41,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const agent = agents[body.agentId ?? "cmo"] ?? cmoAgent;
+  const agentId = body.agentId ?? "cmo";
   const context: FridayContext = body.brandContext ?? {};
 
   try {
-    const stream = await runAgentStream(agent, body.message, context);
+    const stream = runFridayChat(body.message, agentId, context);
 
     return new Response(stream, {
       headers: {

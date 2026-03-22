@@ -1,57 +1,32 @@
-import { z } from "zod";
-
-import type { AgentDefinition, ToolDefinition } from "@/lib/agents/core/runner";
-import { runAgent } from "@/lib/agents/core/runner";
 import { distributionPlanSchema, type AgentRunInput } from "@/lib/agents/schemas";
-import { hasAI } from "@/lib/env";
+import { getAnthropicClient } from "@/lib/agents/core/client";
+import { env, hasAI } from "@/lib/env";
 import { inspectWebsite } from "@/lib/site/inspect";
 
-const inspectSiteTool: ToolDefinition = {
-  name: "inspect_site",
-  description:
-    "Fetch the target website and extract homepage messaging, supporting pages, CTA language, and evidence snippets.",
-  input_schema: {
-    type: "object",
-    properties: {
-      siteUrl: {
-        type: "string",
-        description: "The website URL to inspect",
-      },
-    },
-    required: ["siteUrl"],
-  },
-  execute: async ({ siteUrl }) => {
-    const result = await inspectWebsite(siteUrl as string);
-    return JSON.stringify(result);
-  },
-};
-
-const distributionAgent: AgentDefinition = {
-  name: "Content Distribution Agent",
-  instructions: `You are Friday's first distribution agent.
+const SYSTEM_PROMPT = `You are Friday's first distribution agent.
 
 Your job is to inspect a product website and produce a practical distribution plan that can be executed immediately.
 
 Rules:
-- Always call inspect_site before producing an answer.
-- Ground every recommendation in the website evidence returned by the tool.
-- Do not invent product claims, customers, metrics, or features that are not supported by the tool output.
+- Ground every recommendation in the website evidence provided.
+- Do not invent product claims, customers, metrics, or features that are not supported by the evidence.
 - If something is inferred rather than explicit, keep the wording careful and commercially useful.
 - Prefer sharp, direct positioning over generic marketing language.
 - Focus on channels where lean teams can ship consistently: LinkedIn, X, Email, and Blog.
 - Drafts should sound like a serious founder/operator, not a hype account.
-- Return only valid JSON matching the required schema. No markdown, no extra text — just the JSON object.`,
-  tools: [inspectSiteTool],
-  temperature: 0.7,
-};
+- Return only valid JSON matching the required schema. No markdown, no extra text — just the JSON object.`;
 
-function buildPrompt(input: AgentRunInput) {
+function buildPrompt(input: AgentRunInput, siteContext: string) {
   const notes = input.notes?.trim();
 
   return [
     `Create a distribution plan for ${input.siteUrl}.`,
     `Channels: ${input.channels.join(", ")}.`,
     notes ? `Operator notes: ${notes}` : undefined,
+    "",
+    "Here is the website data (already inspected for you):",
+    siteContext,
+    "",
     "Output requirements:",
     "- infer the product positioning, target user, pains, and CTA from the site",
     "- create 3 to 5 content pillars",
@@ -72,14 +47,30 @@ export async function runContentDistributionAgent(input: AgentRunInput) {
     );
   }
 
-  const result = await runAgent(distributionAgent, buildPrompt(input));
+  // Pre-fetch site data so the agent can focus on planning
+  const siteContext = await inspectWebsite(input.siteUrl);
+  const client = getAnthropicClient();
 
-  if (!result.output) {
+  const response = await client.messages.create({
+    model: env.model,
+    max_tokens: 4096,
+    temperature: 0.7,
+    system: SYSTEM_PROMPT,
+    messages: [
+      { role: "user", content: buildPrompt(input, JSON.stringify(siteContext)) },
+    ],
+  });
+
+  const output = response.content
+    .filter((b) => b.type === "text")
+    .map((b) => ("text" in b ? b.text : ""))
+    .join("");
+
+  if (!output) {
     throw new Error("The agent finished without returning output.");
   }
 
-  // Try to parse the JSON from the output
-  const jsonMatch = result.output.match(/\{[\s\S]*\}/);
+  const jsonMatch = output.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     throw new Error("The agent did not return valid JSON output.");
   }

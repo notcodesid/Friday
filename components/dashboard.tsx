@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
-  ArrowUp,
-  Bot,
   CheckCircle,
   Chrome,
   ChevronRight,
@@ -12,19 +10,17 @@ import {
   Loader2,
   LogOut,
   Mail,
-  MessageSquare,
-  Newspaper,
-  Send,
   ShieldCheck,
-  Sparkles,
-  Target,
-  User,
   X,
 } from "lucide-react";
 
+import type {
+  CompetitorRecord,
+  ProductAnalysis,
+  CompetitorAnalysis,
+  CompetitiveInsights,
+} from "@/lib/agents/schemas";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
-
-const DEFAULT_SITE_URL = "https://www.tryproven.fun/";
 
 type BrandMeta = {
   title: string;
@@ -89,50 +85,109 @@ function getFallbackBrandMeta(siteUrl: string): BrandMeta {
   };
 }
 
-function getLatestSiteUrl(messages: ChatMessage[]) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role !== "user") {
-      continue;
-    }
+const MANUAL_COMPETITOR_REASON = "Added manually.";
 
-    const siteUrl = extractSiteUrl(message.content);
-    if (siteUrl) {
-      return siteUrl;
-    }
+function normalizeCompetitorDomain(value: string) {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return "";
   }
 
-  return null;
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  try {
+    const url = new URL(withProtocol);
+    return url.hostname.replace(/^www\./, "");
+  } catch {
+    return trimmed
+      .replace(/^https?:\/\//, "")
+      .replace(/^www\./, "")
+      .replace(/[/?#].*$/, "")
+      .replace(/\/+$/, "");
+  }
 }
 
-function isPureSiteLoaderMessage(message: ChatMessage) {
-  if (message.role !== "user") {
-    return false;
+function getCompetitorLogo(domain: string, explicitLogo?: string) {
+  const trimmed = explicitLogo?.trim();
+  if (trimmed) {
+    return trimmed;
   }
 
-  const normalized = extractSiteUrl(message.content);
-  if (!normalized) {
-    return false;
-  }
-
-  return normalizeSiteUrl(message.content) === normalized;
+  return `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
 }
 
-function stripLegacySiteLoaderMessages(messages: ChatMessage[]) {
-  if (messages.length < 2) {
-    return messages;
+function normalizeCompetitorRecord(value: unknown): CompetitorRecord | null {
+  if (typeof value === "string") {
+    const domain = normalizeCompetitorDomain(value);
+    if (!domain) {
+      return null;
+    }
+
+    return {
+      name: domain,
+      domain,
+      logo: getCompetitorLogo(domain),
+      reason: MANUAL_COMPETITOR_REASON,
+    };
   }
 
-  const [first, second, ...rest] = messages;
-  if (
-    isPureSiteLoaderMessage(first) &&
-    second?.role === "assistant" &&
-    /i see you've shared/i.test(second.content)
-  ) {
-    return rest;
+  if (!value || typeof value !== "object") {
+    return null;
   }
 
-  return messages;
+  const competitor = value as Partial<CompetitorRecord>;
+  const domain =
+    typeof competitor.domain === "string"
+      ? normalizeCompetitorDomain(competitor.domain)
+      : "";
+
+  if (!domain) {
+    return null;
+  }
+
+  const reason =
+    typeof competitor.reason === "string" && competitor.reason.trim()
+      ? competitor.reason.trim()
+      : MANUAL_COMPETITOR_REASON;
+  const positioning =
+    typeof competitor.positioning === "string" && competitor.positioning.trim()
+      ? competitor.positioning.trim()
+      : undefined;
+
+  return {
+    name:
+      typeof competitor.name === "string" && competitor.name.trim()
+        ? competitor.name.trim()
+        : domain,
+    domain,
+    logo: getCompetitorLogo(
+      domain,
+      typeof competitor.logo === "string" ? competitor.logo : undefined,
+    ),
+    reason,
+    positioning,
+  };
+}
+
+function normalizeCompetitorRecords(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+
+  return value
+    .map((item) => normalizeCompetitorRecord(item))
+    .filter((competitor): competitor is CompetitorRecord => {
+      if (!competitor || seen.has(competitor.domain)) {
+        return false;
+      }
+
+      seen.add(competitor.domain);
+      return true;
+    });
 }
 
 function useBrandMeta(siteUrl: string | null) {
@@ -175,35 +230,192 @@ function useBrandMeta(siteUrl: string | null) {
   return brand;
 }
 
-type DashboardProps = {
+/* ------------------------------------------------------------------ */
+/*  Analysis pipeline hook                                              */
+/* ------------------------------------------------------------------ */
+
+type AnalysisState = {
+  isRunning: boolean;
+  currentStep: number;
+  stepLabel: string;
+  productAnalysis: ProductAnalysis | null;
+  competitors: CompetitorRecord[] | null;
+  competitorAnalyses: CompetitorAnalysis[];
+  insights: CompetitiveInsights | null;
+  errors: Array<{ step: number | string; message: string }>;
+};
+
+const initialAnalysisState: AnalysisState = {
+  isRunning: false,
+  currentStep: 0,
+  stepLabel: "",
+  productAnalysis: null,
+  competitors: null,
+  competitorAnalyses: [],
+  insights: null,
+  errors: [],
+};
+
+function useAnalysisPipeline({
+  accessToken,
+  authRequired,
+}: {
+  accessToken?: string;
+  authRequired: boolean;
+}) {
+  const [state, setState] = useState<AnalysisState>(initialAnalysisState);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const startAnalysis = useCallback(
+    async (siteUrl: string) => {
+      abortRef.current?.abort();
+      setState({ ...initialAnalysisState, isRunning: true, currentStep: 1, stepLabel: "Starting analysis..." });
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
+          body: JSON.stringify({ siteUrl }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          setState((prev) => ({
+            ...prev,
+            isRunning: false,
+            errors: [{ step: 0, message: `Request failed: ${res.status}` }],
+          }));
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          while (buffer.includes("\n\n")) {
+            const idx = buffer.indexOf("\n\n");
+            const raw = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+
+            const eventMatch = raw.match(/^event:\s*(.+)/m);
+            const dataMatch = raw.match(/^data:\s*(.+)/m);
+            if (!eventMatch || !dataMatch) continue;
+
+            const eventName = eventMatch[1].trim();
+            let data: Record<string, unknown>;
+            try {
+              data = JSON.parse(dataMatch[1]);
+            } catch {
+              continue;
+            }
+
+            switch (eventName) {
+              case "step":
+                setState((prev) => ({
+                  ...prev,
+                  currentStep: (data.step as number) ?? prev.currentStep,
+                  stepLabel: (data.label as string) ?? prev.stepLabel,
+                }));
+                break;
+              case "product-analysis":
+                setState((prev) => ({
+                  ...prev,
+                  productAnalysis: data as unknown as ProductAnalysis,
+                }));
+                break;
+              case "competitors-found":
+                setState((prev) => ({
+                  ...prev,
+                  competitors: data as unknown as CompetitorRecord[],
+                }));
+                break;
+              case "competitor-analysis":
+                setState((prev) => ({
+                  ...prev,
+                  competitorAnalyses: [
+                    ...prev.competitorAnalyses,
+                    data as unknown as CompetitorAnalysis,
+                  ],
+                }));
+                break;
+              case "insights":
+                setState((prev) => ({
+                  ...prev,
+                  insights: data as unknown as CompetitiveInsights,
+                }));
+                break;
+              case "error":
+                setState((prev) => ({
+                  ...prev,
+                  errors: [
+                    ...prev.errors,
+                    {
+                      step: (data.step as number | string) ?? "unknown",
+                      message: (data.message as string) ?? "Unknown error",
+                    },
+                  ],
+                }));
+                break;
+              case "done":
+                setState((prev) => ({ ...prev, isRunning: false, currentStep: 0 }));
+                break;
+            }
+          }
+        }
+
+        setState((prev) => ({ ...prev, isRunning: false }));
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          setState((prev) => ({
+            ...prev,
+            isRunning: false,
+            errors: [
+              ...prev.errors,
+              { step: 0, message: (err as Error).message ?? "Analysis failed" },
+            ],
+          }));
+        }
+      }
+    },
+    [accessToken],
+  );
+
+  const stopAnalysis = useCallback(() => {
+    abortRef.current?.abort();
+    setState((prev) => ({ ...prev, isRunning: false }));
+  }, []);
+
+  return { ...state, startAnalysis, stopAnalysis };
+}
+
+/* ------------------------------------------------------------------ */
+
+export type DashboardProps = {
   authEnabled: boolean;
 };
 
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  agentId?: string;
-  timestamp: Date;
-};
-
-type StoredChatState = {
-  draft?: string;
-  chatDraft?: string;
+type StoredWorkspaceState = {
   terminalDraft?: string;
   siteUrl?: string | null;
-  messages: Array<
-    Omit<ChatMessage, "timestamp"> & {
-      timestamp: string;
-    }
-  >;
 };
 
-const CHAT_STORAGE_PREFIX = "friday-terminal-chat";
-const DEFAULT_TERMINAL_SESSION_NAME = "Friday CMO v1.0";
+const WORKSPACE_STORAGE_PREFIX = "friday-workspace";
+const DEFAULT_TERMINAL_SESSION_NAME = "Friday";
 
-function getChatStorageKey(scope: string) {
-  return `${CHAT_STORAGE_PREFIX}:${scope}`;
+function getWorkspaceStorageKey(scope: string) {
+  return `${WORKSPACE_STORAGE_PREFIX}:${scope}`;
 }
 
 function truncateText(value: string, maxLength: number) {
@@ -215,20 +427,7 @@ function truncateText(value: string, maxLength: number) {
   return `${trimmed.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-function getPromptCount(messages: ChatMessage[]) {
-  return messages.filter((message) => message.role === "user").length;
-}
-
-function getTerminalSessionName(messages: ChatMessage[]) {
-  const firstPrompt = messages.find((message) => message.role === "user")?.content;
-  if (!firstPrompt?.trim()) {
-    return DEFAULT_TERMINAL_SESSION_NAME;
-  }
-
-  return truncateText(firstPrompt, 48);
-}
-
-function readStoredChat(storageKey: string): StoredChatState | null {
+function readStoredWorkspace(storageKey: string): StoredWorkspaceState | null {
   if (typeof window === "undefined") {
     return null;
   }
@@ -239,76 +438,35 @@ function readStoredChat(storageKey: string): StoredChatState | null {
       return null;
     }
 
-    const parsed = JSON.parse(raw) as Partial<StoredChatState>;
-    if (!Array.isArray(parsed.messages)) {
-      return null;
-    }
+    const parsed = JSON.parse(raw) as Partial<StoredWorkspaceState>;
 
     return {
-      draft: typeof parsed.draft === "string" ? parsed.draft : "",
-      chatDraft: typeof parsed.chatDraft === "string" ? parsed.chatDraft : undefined,
       terminalDraft:
         typeof parsed.terminalDraft === "string" ? parsed.terminalDraft : undefined,
       siteUrl: typeof parsed.siteUrl === "string" ? parsed.siteUrl : null,
-      messages: parsed.messages
-        .filter(
-          (message) =>
-            message &&
-            typeof message.id === "string" &&
-            (message.role === "user" || message.role === "assistant") &&
-            typeof message.content === "string" &&
-            typeof message.timestamp === "string",
-        )
-        .map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          agentId: typeof message.agentId === "string" ? message.agentId : undefined,
-          timestamp: message.timestamp,
-        })),
     };
   } catch {
     return null;
   }
 }
 
-function writeStoredChat(
+function writeStoredWorkspace(
   storageKey: string,
   payload: {
-    chatDraft: string;
     terminalDraft: string;
     siteUrl: string | null;
-    messages: ChatMessage[];
   },
 ) {
   if (typeof window === "undefined") {
     return;
   }
 
-  const stored: StoredChatState = {
-    chatDraft: payload.chatDraft,
+  const stored: StoredWorkspaceState = {
     terminalDraft: payload.terminalDraft,
     siteUrl: payload.siteUrl,
-    messages: payload.messages.map((message) => ({
-      ...message,
-      timestamp: message.timestamp.toISOString(),
-    })),
   };
 
   window.localStorage.setItem(storageKey, JSON.stringify(stored));
-}
-
-function reviveStoredMessages(
-  messages: StoredChatState["messages"] | undefined,
-): ChatMessage[] {
-  if (!messages) {
-    return [];
-  }
-
-  return messages.map((message) => ({
-    ...message,
-    timestamp: new Date(message.timestamp),
-  }));
 }
 
 function getDisplayName(session: Session | null) {
@@ -340,197 +498,6 @@ function getInitials(value: string) {
   }
 
   return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return "Something went wrong.";
-}
-
-function useChat({
-  accessToken,
-  authRequired,
-  onAuthRequired,
-  competitors,
-  brand,
-  siteUrl,
-}: {
-  accessToken?: string;
-  authRequired: boolean;
-  onAuthRequired: () => void;
-  competitors: string[];
-  brand: BrandMeta;
-  siteUrl: string;
-}) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const replaceMessages = useCallback((nextMessages: ChatMessage[]) => {
-    setMessages(nextMessages);
-  }, []);
-
-  const sendMessage = useCallback(
-    async (content: string, agentId = "cmo") => {
-      const trimmed = content.trim();
-      if (!trimmed || isStreaming) {
-        return;
-      }
-
-      if (authRequired && !accessToken) {
-        onAuthRequired();
-        return;
-      }
-
-      const userMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-        timestamp: new Date(),
-      };
-
-      const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "",
-        agentId,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-      setIsStreaming(true);
-
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-          },
-          body: JSON.stringify({
-            message: trimmed,
-            agentId,
-            brandContext: {
-              brandName: brand.title,
-              oneLiner: brand.description || undefined,
-              siteUrl,
-              competitors,
-            },
-          }),
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          if (res.status === 401) {
-            onAuthRequired();
-          }
-
-          const err = await res.json().catch(() => ({ error: "Request failed" }));
-          setMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantMsg.id
-                ? { ...message, content: `Error: ${err.error ?? res.statusText}` }
-                : message,
-            ),
-          );
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          throw new Error("No response body");
-        }
-
-        const decoder = new TextDecoder();
-        let accumulated = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-
-          accumulated += decoder.decode(value, { stream: true });
-          const current = accumulated;
-          setMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantMsg.id
-                ? { ...message, content: current }
-                : message,
-            ),
-          );
-        }
-      } catch (error) {
-        if ((error as Error).name !== "AbortError") {
-          setMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantMsg.id
-                ? {
-                    ...message,
-                    content: `Error: ${getErrorMessage(error)}`,
-                  }
-                : message,
-            ),
-          );
-        }
-      } finally {
-        setIsStreaming(false);
-        abortRef.current = null;
-      }
-    },
-    [accessToken, authRequired, brand, competitors, isStreaming, onAuthRequired, siteUrl],
-  );
-
-  const stopStreaming = useCallback(() => {
-    abortRef.current?.abort();
-    setIsStreaming(false);
-  }, []);
-
-  return { isStreaming, messages, replaceMessages, sendMessage, stopStreaming };
-}
-
-function ChatMessageBubble({ msg }: { msg: ChatMessage }) {
-  if (msg.role === "user") {
-    return (
-      <div className="chat-msg chat-msg-user">
-        <div className="chat-msg-avatar user-msg-avatar">
-          <User style={{ width: 14, height: 14 }} />
-        </div>
-        <div className="chat-msg-content">
-          <div className="chat-msg-text">{msg.content}</div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="chat-msg chat-msg-assistant">
-      <div className="chat-msg-avatar assistant-msg-avatar">
-        <Sparkles style={{ width: 14, height: 14 }} />
-      </div>
-      <div className="chat-msg-content">
-        {msg.content ? (
-          <div className="chat-msg-text">{msg.content}</div>
-        ) : (
-          <div className="chat-msg-text chat-typing">
-            <Loader2
-              className="spin"
-              style={{ width: 14, height: 14, color: "var(--muted)" }}
-            />
-            <span style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
-              Researching &amp; thinking...
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function AuthControl({
@@ -717,8 +684,6 @@ function AuthModal({
 }
 
 export function Dashboard({ authEnabled }: DashboardProps) {
-  const [activeTab, setActiveTab] = useState("Health");
-  const [chatInput, setChatInput] = useState("");
   const [terminalInput, setTerminalInput] = useState("");
   const [currentSiteUrl, setCurrentSiteUrl] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -731,23 +696,31 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   const [linkSentTo, setLinkSentTo] = useState<string | null>(null);
   const [isSendingLink, setIsSendingLink] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const [competitors, setCompetitors] = useState<string[]>([]);
-  const [hydratedChatStorageKey, setHydratedChatStorageKey] = useState<string | null>(null);
+  const [competitors, setCompetitors] = useState<CompetitorRecord[]>([]);
+  const [hydratedWorkspaceStorageKey, setHydratedWorkspaceStorageKey] = useState<string | null>(
+    null,
+  );
   const [hydratedCompetitorStorageKey, setHydratedCompetitorStorageKey] = useState<string | null>(
     null,
   );
   const [competitorInput, setCompetitorInput] = useState("");
+  const [competitorError, setCompetitorError] = useState<string | null>(null);
   const [isDiscoveringCompetitors, setIsDiscoveringCompetitors] = useState(false);
   const isSiteLoaded = Boolean(currentSiteUrl);
   const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
   const competitorStorageKey = currentSiteUrl
-    ? `friday-competitors:${currentDomain}`
+    ? `friday-competitors:v2:${currentDomain}`
     : null;
   const brand = useBrandMeta(currentSiteUrl);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const analysis = useAnalysisPipeline({
+    accessToken: session?.access_token,
+    authRequired: authEnabled,
+  });
+
   const terminalInputRef = useRef<HTMLInputElement>(null);
-  const chatInputRef = useRef<HTMLInputElement>(null);
   const authMenuRef = useRef<HTMLDivElement>(null);
+  const attemptedCompetitorDiscoveryKeyRef = useRef<string | null>(null);
 
   const openAuthModal = useCallback(() => {
     setIsAuthMenuOpen(false);
@@ -758,25 +731,15 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     setIsAuthModalOpen(false);
   }, []);
 
-  const { isStreaming, messages, replaceMessages, sendMessage, stopStreaming } = useChat({
-    accessToken: session?.access_token,
-    authRequired: authEnabled,
-    onAuthRequired: openAuthModal,
-    competitors,
-    brand,
-    siteUrl: currentSiteUrl ?? DEFAULT_SITE_URL,
-  });
-
   const browserAuthClient = authEnabled ? getSupabaseBrowserClient() : null;
-  const chatStorageKey = authEnabled
+  const workspaceStorageKey = authEnabled
     ? session?.user.id
-      ? getChatStorageKey(session.user.id)
+      ? getWorkspaceStorageKey(session.user.id)
       : null
-    : getChatStorageKey("preview");
-  const promptCount = getPromptCount(messages);
+    : getWorkspaceStorageKey("preview");
   const terminalSessionName = currentSiteUrl
     ? truncateText(currentSiteUrl, 48)
-    : getTerminalSessionName(messages);
+    : DEFAULT_TERMINAL_SESSION_NAME;
   const authSetupError =
     authEnabled && !browserAuthClient
       ? "NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are required for authentication."
@@ -789,15 +752,11 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     ? "Checking session"
     : isLocked
       ? "Authentication required"
-      : promptCount > 0
-        ? `${promptCount} ${promptCount === 1 ? "prompt" : "prompts"} in session`
+      : analysis.isRunning
+        ? analysis.stepLabel || "Running analysis"
         : isSiteLoaded
-          ? "Site loaded — use the chat panel on the right"
+          ? "Site loaded"
           : "Load a website to start";
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
   useEffect(() => {
     if (!competitorStorageKey || hydratedCompetitorStorageKey !== competitorStorageKey) {
@@ -813,6 +772,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     void Promise.resolve().then(() => {
       if (!competitorStorageKey) {
         setCompetitors([]);
+        setCompetitorError(null);
         setHydratedCompetitorStorageKey(null);
         return;
       }
@@ -823,29 +783,41 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         const stored = window.localStorage.getItem(competitorStorageKey);
         if (!stored) {
           setCompetitors([]);
+          setCompetitorError(null);
           setHydratedCompetitorStorageKey(competitorStorageKey);
           return;
         }
 
-        const parsed = JSON.parse(stored) as string[];
-        setCompetitors(Array.isArray(parsed) ? parsed : []);
+        const parsed = JSON.parse(stored) as unknown;
+        setCompetitors(normalizeCompetitorRecords(parsed));
+        setCompetitorError(null);
         setHydratedCompetitorStorageKey(competitorStorageKey);
       } catch {
         setCompetitors([]);
+        setCompetitorError(null);
         setHydratedCompetitorStorageKey(competitorStorageKey);
       }
     });
   }, [competitorStorageKey]);
 
+  // Sync pipeline competitor results to the left-column list
   useEffect(() => {
-    if (!currentSiteUrl) return;
+    if (analysis.competitors && analysis.competitors.length > 0) {
+      setCompetitors(normalizeCompetitorRecords(analysis.competitors));
+    }
+  }, [analysis.competitors]);
+
+  useEffect(() => {
+    if (!currentSiteUrl || !competitorStorageKey) return;
+    if (hydratedCompetitorStorageKey !== competitorStorageKey) return;
     if (competitors.length > 0 || isDiscoveringCompetitors) return;
-    // Wait until brand data has been fetched
-    if (!brand.description) return;
-    // Skip if auth is required but no session yet
+    if (analysis.isRunning || analysis.competitors) return;
+    if (attemptedCompetitorDiscoveryKeyRef.current === competitorStorageKey) return;
     if (authEnabled && !session?.access_token) return;
 
     let cancelled = false;
+    attemptedCompetitorDiscoveryKeyRef.current = competitorStorageKey;
+    setCompetitorError(null);
     setIsDiscoveringCompetitors(true);
 
     void (async () => {
@@ -865,20 +837,58 @@ export function Dashboard({ authEnabled }: DashboardProps) {
           }),
         });
 
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { competitors?: string[] };
-        if (cancelled || !data.competitors?.length) return;
-        setCompetitors(data.competitors);
+        if (cancelled) return;
+
+        if (!res.ok) {
+          const errorBody = (await res.json().catch(() => ({}))) as { error?: string };
+          setCompetitorError(
+            errorBody.error || "Could not discover competitors automatically.",
+          );
+          return;
+        }
+
+        const data = (await res.json()) as {
+          summary?: string;
+          competitors?: unknown;
+          error?: string;
+        };
+        if (cancelled) return;
+
+        const nextCompetitors = normalizeCompetitorRecords(data.competitors);
+        if (!nextCompetitors.length) {
+          setCompetitorError(
+            data.error || "No competitors were found for this website yet.",
+          );
+          return;
+        }
+
+        setCompetitors(nextCompetitors);
       } catch {
-        // silently fail — user can still add manually
+        if (!cancelled) {
+          setCompetitorError(
+            "Competitor discovery failed. Retry or add competitor domains manually.",
+          );
+        }
       } finally {
         if (!cancelled) setIsDiscoveringCompetitors(false);
       }
     })();
 
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authEnabled, currentSiteUrl, session?.access_token, brand.description]);
+  }, [
+    authEnabled,
+    brand.description,
+    brand.title,
+    competitorError,
+    competitorStorageKey,
+    competitors.length,
+    currentSiteUrl,
+    hydratedCompetitorStorageKey,
+    isDiscoveringCompetitors,
+    analysis.competitors,
+    analysis.isRunning,
+    session?.access_token,
+  ]);
 
   useEffect(() => {
     if (!authEnabled) {
@@ -931,51 +941,38 @@ export function Dashboard({ authEnabled }: DashboardProps) {
 
   useEffect(() => {
     void Promise.resolve().then(() => {
-      if (!chatStorageKey) {
-        replaceMessages([]);
-        setChatInput("");
+      if (!workspaceStorageKey) {
         setTerminalInput("");
         setCurrentSiteUrl(null);
-        setHydratedChatStorageKey(null);
+        setHydratedWorkspaceStorageKey(null);
         return;
       }
 
-      const stored = readStoredChat(chatStorageKey);
-      const restoredMessages = reviveStoredMessages(stored?.messages);
-      const cleanedMessages = stripLegacySiteLoaderMessages(restoredMessages);
-      replaceMessages(cleanedMessages);
-      setChatInput(stored?.chatDraft ?? stored?.draft ?? "");
+      const stored = readStoredWorkspace(workspaceStorageKey);
       setTerminalInput(stored?.terminalDraft ?? "");
-      setCurrentSiteUrl(stored?.siteUrl ?? getLatestSiteUrl(restoredMessages) ?? null);
-      setHydratedChatStorageKey(chatStorageKey);
+      setCurrentSiteUrl(stored?.siteUrl ?? null);
+      setHydratedWorkspaceStorageKey(workspaceStorageKey);
     });
-  }, [chatStorageKey, replaceMessages]);
+  }, [workspaceStorageKey]);
 
   useEffect(() => {
-    if (!chatStorageKey || hydratedChatStorageKey !== chatStorageKey) {
+    if (!workspaceStorageKey || hydratedWorkspaceStorageKey !== workspaceStorageKey) {
       return;
     }
 
-    writeStoredChat(chatStorageKey, {
-      chatDraft: chatInput,
+    writeStoredWorkspace(workspaceStorageKey, {
       terminalDraft: terminalInput,
       siteUrl: currentSiteUrl,
-      messages,
     });
-  }, [chatInput, chatStorageKey, currentSiteUrl, hydratedChatStorageKey, messages, terminalInput]);
+  }, [currentSiteUrl, hydratedWorkspaceStorageKey, terminalInput, workspaceStorageKey]);
 
   useEffect(() => {
     if (isLocked || isAuthLoading) {
       return;
     }
 
-    if (isSiteLoaded) {
-      chatInputRef.current?.focus();
-      return;
-    }
-
     terminalInputRef.current?.focus();
-  }, [isAuthLoading, isLocked, isSiteLoaded]);
+  }, [isAuthLoading, isLocked]);
 
   useEffect(() => {
     function handleDocumentClick(event: MouseEvent) {
@@ -1014,7 +1011,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
       return;
     }
 
-    if (isStreaming || !terminalInput.trim()) {
+    if (!terminalInput.trim()) {
       return;
     }
 
@@ -1027,63 +1024,30 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     setTerminalError(null);
     setCurrentSiteUrl(nextSiteUrl);
     setTerminalInput("");
-    replaceMessages([]);
-    setChatInput("");
-  }
-
-  function handleChatSubmit(event?: FormEvent) {
-    event?.preventDefault();
-
-    if (isLocked) {
-      openAuthModal();
-      return;
-    }
-
-    if (!isSiteLoaded) {
-      setTerminalError("Load a website in the terminal before starting chat.");
-      return;
-    }
-
-    if (!chatInput.trim() || isStreaming) {
-      return;
-    }
-
-    setTerminalError(null);
-    void sendMessage(chatInput);
-    setChatInput("");
-  }
-
-  function handleQuickAction(prompt: string) {
-    if (isLocked) {
-      openAuthModal();
-      return;
-    }
-
-    if (!isSiteLoaded) {
-      setTerminalError("Load a website in the terminal before using quick actions.");
-      return;
-    }
-
-    if (isStreaming) {
-      return;
-    }
-
-    setTerminalError(null);
-    void sendMessage(prompt);
+    void analysis.startAnalysis(nextSiteUrl);
   }
 
   function addCompetitor(domain: string) {
-    const cleaned = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-    if (!cleaned || competitors.includes(cleaned)) return;
-    setCompetitors((prev) => [...prev, cleaned]);
+    const competitor = normalizeCompetitorRecord(domain);
+    if (!competitor || competitors.some((entry) => entry.domain === competitor.domain)) {
+      return;
+    }
+
+    setCompetitors((prev) => [...prev, competitor]);
   }
 
   function removeCompetitor(domain: string) {
-    setCompetitors((prev) => prev.filter((c) => c !== domain));
+    setCompetitors((prev) => prev.filter((competitor) => competitor.domain !== domain));
   }
 
-  function analyzeCompetitor(domain: string) {
-    handleQuickAction(`Analyze our competitor ${domain} — scrape their site, find their positioning, strengths, weaknesses, content strategy, and identify gaps we can exploit.`);
+  function retryCompetitorDiscovery() {
+    if (!competitorStorageKey) {
+      return;
+    }
+
+    attemptedCompetitorDiscoveryKeyRef.current = null;
+    setCompetitors([]);
+    setCompetitorError(null);
   }
 
   async function handleSendMagicLink(event: FormEvent<HTMLFormElement>) {
@@ -1177,26 +1141,10 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     <div className="dashboard-container">
       <div className="terminal-card">
         <div className="terminal-header">
-          <div className="flex items-center gap-3">
-            <button type="button" className="collapse-btn" aria-label="Collapse terminal">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="m18 15-6-6-6 6" />
-              </svg>
-            </button>
+          <div className="flex items-center">
             <div className="terminal-title">
               <div className="brand" style={{ color: "var(--muted)" }}>
-                <Bot className="icon" />
-                <span className="status-dot"></span>
-                <span>AI CMO Terminal • Running Daily</span>
+                <span>Friday</span>
               </div>
             </div>
           </div>
@@ -1215,49 +1163,16 @@ export function Dashboard({ authEnabled }: DashboardProps) {
         </div>
 
         <div className="terminal-content">
-          <div style={{ color: "var(--muted)", marginBottom: "24px" }}>
-            <div>Your AI Chief Marketing Officer</div>
-            <div>v1.0 • Powered by Claude</div>
-          </div>
-
-
           <div style={{ color: "#3b82f6", marginBottom: "4px" }}>$ {terminalSessionName}</div>
           <div style={{ color: "#eab308", marginBottom: "4px" }}>&gt; {terminalStatus}</div>
-
-          {messages.length === 0 && !isLocked && (
-            <div
-              style={{
-                color: "#22c55e",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                marginBottom: "4px",
-                marginTop: "24px",
-              }}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M20 6 9 17l-5-5" />
-              </svg>
-              AI Chat initialized
-            </div>
-          )}
 
           {isLocked && (
             <div className="auth-lock-panel">
               <div className="auth-lock-copy">
                 <div className="auth-lock-title">Authentication required</div>
                 <div className="auth-lock-text">
-                  Sign in with your email to unlock chat, quick actions, and protected
-                  API access.
+                  Sign in with your email to unlock analysis tools and protected API
+                  access.
                 </div>
               </div>
               <button type="button" className="auth-primary-btn" onClick={openAuthModal}>
@@ -1273,14 +1188,16 @@ export function Dashboard({ authEnabled }: DashboardProps) {
             style={{ display: "flex", alignItems: "center", marginTop: "8px" }}
           >
             <div
-              className={isStreaming ? "terminal-cursor" : ""}
+              className={analysis.isRunning ? "terminal-cursor" : ""}
               style={{
-                width: isStreaming ? 8 : 0,
-                marginRight: isStreaming ? 8 : 0,
-                display: isStreaming ? "inline-block" : "none",
+                width: analysis.isRunning ? 8 : 0,
+                marginRight: analysis.isRunning ? 8 : 0,
+                display: analysis.isRunning ? "inline-block" : "none",
               }}
             ></div>
-            {!isStreaming && <span style={{ color: "#22c55e", marginRight: "8px" }}>&gt;</span>}
+            {!analysis.isRunning && (
+              <span style={{ color: "#22c55e", marginRight: "8px" }}>&gt;</span>
+            )}
             <input
               ref={terminalInputRef}
               type="text"
@@ -1296,15 +1213,15 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                   openAuthModal();
                 }
               }}
-              disabled={isStreaming || isAuthLoading}
+              disabled={isAuthLoading}
               readOnly={isLocked}
               placeholder={
                 isAuthLoading
                   ? "Checking your session..."
                   : isLocked
                     ? "Sign in to start a protected session..."
-                    : isStreaming
-                      ? "Waiting for response..."
+                    : analysis.isRunning
+                      ? "Analyzing website..."
                       : "Paste a website URL here..."
               }
               style={{
@@ -1392,7 +1309,26 @@ export function Dashboard({ authEnabled }: DashboardProps) {
             </div>
 
             <div className="card">
-              <div className="card-header">Competitors</div>
+              <div className="card-header">
+                <span>Competitors</span>
+                {competitorError && (
+                  <button
+                    type="button"
+                    onClick={retryCompetitorDiscovery}
+                    style={{
+                      background: "var(--card-hover)",
+                      color: "var(--ink)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "4px 8px",
+                      cursor: "pointer",
+                      fontSize: "0.75rem",
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
               <div className="card-body">
                 {isDiscoveringCompetitors && competitors.length === 0 && (
                   <div
@@ -1403,37 +1339,54 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                       className="spin"
                       style={{ width: 14, height: 14 }}
                     />
-                    Discovering competitors...
+                    Fetching live competitor data...
                   </div>
                 )}
-                <div className="tag-list">
-                  {competitors.map((domain) => (
-                    <div
-                      key={domain}
-                      className="tag-item"
-                      style={{ cursor: "pointer" }}
-                      onClick={() => analyzeCompetitor(domain)}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
-                        alt={domain}
-                        style={{ width: 16, height: 16, borderRadius: 2 }}
-                      />
-                      {domain}
-                      <X
-                        style={{
-                          width: 12,
-                          height: 12,
-                          cursor: "pointer",
-                          marginLeft: 4,
-                        }}
-                        className="text-muted"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeCompetitor(domain);
-                        }}
-                      />
+                {competitorError && (
+                  <div
+                    className="text-sm"
+                    style={{ marginBottom: 12, lineHeight: 1.6, color: "var(--danger)" }}
+                  >
+                    {competitorError}
+                  </div>
+                )}
+                {competitors.length === 0 && !isDiscoveringCompetitors && (
+                  <div className="text-sm text-muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
+                    No competitors loaded yet. Add a domain manually or let Friday
+                    discover them from the current site.
+                  </div>
+                )}
+                <div className="competitor-list">
+                  {competitors.map((competitor) => (
+                    <div key={competitor.domain} className="competitor-item">
+                      <div className="competitor-item-button">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={competitor.logo || getCompetitorLogo(competitor.domain)}
+                          alt={competitor.name}
+                          style={{ width: 18, height: 18, borderRadius: 4 }}
+                        />
+                        <div className="competitor-copy">
+                          <div className="competitor-copy-header">
+                            <span className="competitor-name">{competitor.name}</span>
+                            <span className="competitor-domain">{competitor.domain}</span>
+                          </div>
+                          <div className="competitor-reason">{competitor.reason}</div>
+                          {competitor.positioning && (
+                            <div className="competitor-positioning">
+                              {competitor.positioning}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="competitor-remove-btn"
+                        aria-label={`Remove ${competitor.domain}`}
+                        onClick={() => removeCompetitor(competitor.domain)}
+                      >
+                        <X style={{ width: 12, height: 12 }} />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1443,11 +1396,11 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                     addCompetitor(competitorInput);
                     setCompetitorInput("");
                   }}
-                  style={{ marginTop: 8 }}
+                  style={{ marginTop: competitors.length > 0 ? 12 : 8 }}
                 >
                   <input
                     type="text"
-                    placeholder="Add competitor domain..."
+                    placeholder="Add competitor domain or URL..."
                     value={competitorInput}
                     onChange={(e) => setCompetitorInput(e.target.value)}
                     style={{
@@ -1463,410 +1416,303 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 </form>
               </div>
             </div>
-
-            <div className="card">
-              <div className="card-header">Quick Actions</div>
-              <div
-                className="list-item"
-                onClick={() =>
-                  handleQuickAction(
-                    competitors.length > 0
-                      ? `Analyze our competitors (${competitors.join(", ")}) and find content gaps we can exploit`
-                      : "Research and identify our top competitors in the habit tracking / accountability app space",
-                  )
-                }
-              >
-                <div className="flex items-center">
-                  <Target className="icon" />
-                  <span className="text-sm">Analyze Competitors</span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-              <div
-                className="list-item"
-                onClick={() =>
-                  handleQuickAction(
-                    "Write 3 LinkedIn posts about building habits with financial accountability",
-                  )
-                }
-              >
-                <div className="flex items-center">
-                  <Send className="icon" />
-                  <span className="text-sm">Generate Social Posts</span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-              <div
-                className="list-item"
-                onClick={() =>
-                  handleQuickAction(
-                    "Write a blog post targeting the keyword 'habit tracking app with money stakes'",
-                  )
-                }
-              >
-                <div className="flex items-center">
-                  <Newspaper className="icon" />
-                  <span className="text-sm">Write Blog Post</span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-              <div
-                className="list-item"
-                onClick={() =>
-                  handleQuickAction(
-                    `Create a 3-email welcome sequence for new ${brand.title} signups`,
-                  )
-                }
-              >
-                <div className="flex items-center">
-                  <MessageSquare className="icon" />
-                  <span className="text-sm">Create Email Campaign</span>
-                </div>
-                <ChevronRight
-                  className="icon text-muted"
-                  style={{ width: 16, height: 16, margin: 0 }}
-                />
-              </div>
-            </div>
           </div>
 
           <div className="column">
+            {/* Pipeline progress */}
             <div className="card">
-              <div
-                className="card-header"
-                style={{ paddingBottom: 0, borderBottom: "none" }}
-              >
-                Analytics Overview
+              <div className="card-header">Analysis Pipeline</div>
+              <div className="card-body" style={{ padding: "8px 16px" }}>
+                {[
+                  { step: 1, label: "Product Analysis" },
+                  { step: 2, label: "Competitor Discovery" },
+                  { step: 3, label: "Competitor Analysis" },
+                  { step: 4, label: "Strategic Insights" },
+                ].map(({ step, label }) => {
+                  const isDone =
+                    (step === 1 && analysis.productAnalysis !== null) ||
+                    (step === 2 && analysis.competitors !== null) ||
+                    (step === 3 && !analysis.isRunning && analysis.competitorAnalyses.length > 0 && analysis.currentStep !== 3) ||
+                    (step === 4 && analysis.insights !== null);
+                  const isActive = analysis.isRunning && analysis.currentStep === step;
+                  const status = isDone ? "done" : isActive ? "running" : "pending";
+
+                  return (
+                    <div key={step} className={`step-indicator ${status}`}>
+                      <div className="step-icon">
+                        {status === "done" ? (
+                          <CheckCircle style={{ width: 16, height: 16 }} />
+                        ) : status === "running" ? (
+                          <Loader2 className="spin" style={{ width: 16, height: 16 }} />
+                        ) : (
+                          <div
+                            style={{
+                              width: 16,
+                              height: 16,
+                              borderRadius: "50%",
+                              border: "2px solid var(--border)",
+                            }}
+                          />
+                        )}
+                      </div>
+                      <div className="step-label">
+                        {isActive ? analysis.stepLabel : label}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="card-body">
-                <div className="tabs">
-                  {["Health", "Links", "AI/GEO", "Checks"].map((tab) => (
+            </div>
+
+            {/* Product Analysis */}
+            {analysis.productAnalysis && (
+              <div className="card">
+                <div className="card-header">Product Analysis</div>
+                <div className="card-body">
+                  <div className="font-semibold text-sm">
+                    {analysis.productAnalysis.brandName}
+                  </div>
+                  <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+                    {analysis.productAnalysis.oneLiner}
+                  </div>
+                  <div className="text-xs" style={{ marginTop: 8, color: "var(--ink)", lineHeight: 1.6 }}>
+                    {analysis.productAnalysis.positioning}
+                  </div>
+
+                  {analysis.productAnalysis.targetAudience.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Target Audience
+                      </div>
+                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
+                        {analysis.productAnalysis.targetAudience.map((a) => (
+                          <span key={a} className="analysis-tag">{a}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {analysis.productAnalysis.painPoints.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Pain Points Addressed
+                      </div>
+                      {analysis.productAnalysis.painPoints.map((p) => (
+                        <div key={p} className="analysis-list-item">{p}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {analysis.productAnalysis.differentiators.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Differentiators
+                      </div>
+                      {analysis.productAnalysis.differentiators.map((d) => (
+                        <div key={d} className="analysis-list-item">{d}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {analysis.productAnalysis.brandVoice.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Brand Voice
+                      </div>
+                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
+                        {analysis.productAnalysis.brandVoice.map((v) => (
+                          <span key={v} className="analysis-tag">{v}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Competitors Found */}
+            {analysis.competitors && analysis.competitors.length > 0 && (
+              <div className="card">
+                <div className="card-header">
+                  Competitors Found
+                  <span className="text-xs text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+                    {analysis.competitors.length}
+                  </span>
+                </div>
+                <div className="card-body" style={{ padding: "4px 16px" }}>
+                  {analysis.competitors.map((c) => (
                     <div
-                      key={tab}
-                      className={`tab ${activeTab === tab ? "active" : ""}`}
-                      onClick={() => setActiveTab(tab)}
+                      key={c.domain}
+                      className="flex items-center gap-2"
+                      style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}
                     >
-                      {tab}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={c.logo || `https://www.google.com/s2/favicons?domain=${c.domain}&sz=32`}
+                        alt=""
+                        style={{ width: 20, height: 20, borderRadius: 4, flexShrink: 0 }}
+                      />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div className="text-sm font-semibold" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {c.name}
+                        </div>
+                        <div className="text-xs text-muted">{c.domain}</div>
+                      </div>
+                      {c.positioning && (
+                        <div className="text-xs text-muted" style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flexShrink: 0 }}>
+                          {c.positioning}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
 
-                <div className="p-2">
-                  <div className="font-semibold text-sm mb-4">
-                    Mobile Performance
+            {/* Competitor Analyses */}
+            {analysis.competitorAnalyses.map((ca) => (
+              <div key={ca.domain} className="card">
+                <div className="card-header">
+                  <span>{ca.name}</span>
+                  <span className="text-xs text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+                    {ca.domain}
+                  </span>
+                </div>
+                <div className="card-body">
+                  <div className="text-xs" style={{ color: "var(--ink)", lineHeight: 1.6 }}>
+                    {ca.positioning}
                   </div>
-                  <div className="performance-grid">
-                    <div className="score-circle-container">
-                      <div className="score-circle orange">55</div>
-                      <div className="score-label">Performance</div>
-                    </div>
-                    <div className="score-circle-container">
-                      <div className="score-circle green">96</div>
-                      <div className="score-label">Accessibility</div>
-                    </div>
-                    <div className="score-circle-container">
-                      <div className="score-circle green">100</div>
-                      <div className="score-label">
-                        Best
-                        <br />
-                        Practices
+
+                  {ca.strengths.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Strengths
+                      </div>
+                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
+                        {ca.strengths.map((s) => (
+                          <span key={s} className="analysis-tag strength-tag">{s}</span>
+                        ))}
                       </div>
                     </div>
-                    <div className="score-circle-container">
-                      <div className="score-circle green">92</div>
-                      <div className="score-label">SEO</div>
-                    </div>
-                  </div>
+                  )}
 
-                  <div className="font-semibold text-sm mb-4 mt-6">
-                    Desktop Performance
-                  </div>
-                  <div className="performance-grid">
-                    <div className="score-circle-container">
-                      <div className="score-circle orange">73</div>
-                      <div className="score-label">Performance</div>
-                    </div>
-                    <div className="score-circle-container">
-                      <div className="score-circle green">96</div>
-                      <div className="score-label">Accessibility</div>
-                    </div>
-                    <div className="score-circle-container">
-                      <div className="score-circle green">100</div>
-                      <div className="score-label">
-                        Best
-                        <br />
-                        Practices
+                  {ca.weaknesses.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Weaknesses
+                      </div>
+                      <div className="flex" style={{ flexWrap: "wrap", gap: 4 }}>
+                        {ca.weaknesses.map((w) => (
+                          <span key={w} className="analysis-tag weakness-tag">{w}</span>
+                        ))}
                       </div>
                     </div>
-                    <div className="score-circle-container">
-                      <div className="score-circle green">92</div>
-                      <div className="score-label">SEO</div>
+                  )}
+
+                  {ca.contentStrategy && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Content Strategy
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--ink)", lineHeight: 1.5 }}>
+                        <strong>Tone:</strong> {ca.contentStrategy.tone}
+                        {ca.contentStrategy.cadence && (
+                          <> &middot; <strong>Cadence:</strong> {ca.contentStrategy.cadence}</>
+                        )}
+                      </div>
+                      {ca.contentStrategy.channels.length > 0 && (
+                        <div className="flex" style={{ flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                          {ca.contentStrategy.channels.map((ch) => (
+                            <span key={ch} className="analysis-tag">{ch}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+                  )}
 
-            <div className="card">
-              <div className="card-header">Core Web Vitals</div>
-              <div className="card-body">
-                <div className="core-vitals-grid">
-                  <div className="vital-card red">
-                    <div className="vital-label">LCP</div>
-                    <div className="vital-value">15.8s</div>
-                  </div>
-                  <div className="vital-card red">
-                    <div className="vital-label">FCP</div>
-                    <div className="vital-value">11.6s</div>
-                  </div>
-                  <div className="vital-card green">
-                    <div className="vital-label">TBT</div>
-                    <div className="vital-value">0ms</div>
-                  </div>
-                  <div className="vital-card green">
-                    <div className="vital-label">CLS</div>
-                    <div className="vital-value">0.004</div>
-                  </div>
+                  {ca.pricingModel && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 4 }}>
+                        Pricing
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--ink)" }}>
+                        {ca.pricingModel}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
+            ))}
 
-            <div className="card">
-              <div className="card-header">SEO Health</div>
-              <div className="list-item">
-                <div className="flex items-center gap-2">
-                  <CheckCircle
-                    className="text-success"
-                    style={{ width: 16, height: 16 }}
-                  />
-                  <span className="text-sm">Meta Title</span>
+            {/* Competitive Insights */}
+            {analysis.insights && (
+              <div className="card">
+                <div className="card-header">Competitive Insights</div>
+                <div className="card-body">
+                  {analysis.insights.opportunities.length > 0 && (
+                    <div>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Opportunities
+                      </div>
+                      {analysis.insights.opportunities.map((o) => (
+                        <div key={o} className="analysis-list-item">{o}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {analysis.insights.gaps.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Competitive Gaps
+                      </div>
+                      {analysis.insights.gaps.map((g) => (
+                        <div key={g} className="analysis-list-item">{g}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {analysis.insights.recommendations.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Recommendations
+                      </div>
+                      {analysis.insights.recommendations.map((r) => (
+                        <div key={r} className="analysis-list-item">{r}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {analysis.insights.positioningAdvice && (
+                    <div style={{ marginTop: 12 }}>
+                      <div className="text-xs text-muted" style={{ marginBottom: 6 }}>
+                        Positioning Advice
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--ink)", lineHeight: 1.6 }}>
+                        {analysis.insights.positioningAdvice}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <span className="text-success font-semibold text-sm">39 chars</span>
               </div>
-            </div>
+            )}
+
+            {/* Errors */}
+            {analysis.errors.length > 0 && (
+              <div className="card">
+                <div className="card-header" style={{ color: "var(--danger)" }}>
+                  Errors
+                </div>
+                <div className="card-body">
+                  {analysis.errors.map((e, i) => (
+                    <div key={i} className="text-xs" style={{ color: "var(--danger)", padding: "4px 0" }}>
+                      Step {e.step}: {e.message}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          <div className="column">
-            <div className="promo-card">
-              <div className="promo-icon-wrap">
-                <div className="promo-icon">
-                  <Bot style={{ width: 24, height: 24 }} />
-                </div>
-              </div>
-              <div className="flex-col flex-1 gap-1">
-                <div className="font-semibold text-sm">Your AI CMO is live</div>
-                <div className="text-xs text-muted">
-                  Powered by Claude • Real research tools
-                </div>
-                <div className="text-xs text-success" style={{ marginTop: 2 }}>
-                  {isStreaming ? "Researching..." : "Ready"}
-                </div>
-              </div>
-              <div
-                className="status-indicator"
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  background: isStreaming ? "var(--warning)" : "var(--success)",
-                }}
-              />
-            </div>
-
-            <div className="card">
-              <div className="card-header">AI CMO Feed</div>
-              <div
-                className="feed-item"
-                style={{ cursor: "pointer" }}
-                onClick={() =>
-                  handleQuickAction(
-                    "Find Reddit threads where people are discussing habit tracking apps or accountability apps. What subreddits should we target?",
-                  )
-                }
-              >
-                <div className="feed-item-header">
-                  <div className="feed-icon reddit">
-                    <MessageSquare />
-                  </div>
-                  <div className="feed-content">
-                    <div className="feed-title">Reddit Opportunities</div>
-                    <div className="feed-desc">Click to find threads</div>
-                  </div>
-                  <ChevronRight
-                    className="feed-chevron"
-                    style={{ width: 16, height: 16 }}
-                  />
-                </div>
-              </div>
-              <div
-                className="feed-item"
-                style={{ cursor: "pointer" }}
-                onClick={() =>
-                  handleQuickAction(
-                    `Analyze the SEO health of ${currentDomain} and give me specific recommendations to improve rankings`,
-                  )
-                }
-              >
-                <div className="feed-item-header">
-                  <div className="feed-icon seo" style={{ background: "#0ea5e9" }}>
-                    <Target />
-                  </div>
-                  <div className="feed-content">
-                    <div className="feed-title">SEO + GEO Recommendations</div>
-                    <div className="feed-desc">Click to analyze</div>
-                  </div>
-                  <ChevronRight
-                    className="feed-chevron"
-                    style={{ width: 16, height: 16 }}
-                  />
-                </div>
-              </div>
-              <div
-                className="feed-item"
-                style={{ cursor: "pointer" }}
-                onClick={() =>
-                  handleQuickAction(
-                    `Generate 3 SEO-optimized blog post ideas for ${brand.title} that could rank well. Research what's currently ranking for our space.`,
-                  )
-                }
-              >
-                <div className="feed-item-header">
-                  <div className="feed-icon article">
-                    <Newspaper />
-                  </div>
-                  <div className="feed-content">
-                    <div className="feed-title">Articles</div>
-                    <div className="feed-desc">Click to generate topics</div>
-                  </div>
-                  <ChevronRight
-                    className="feed-chevron"
-                    style={{ width: 16, height: 16 }}
-                  />
-                </div>
-              </div>
-              <div
-                className="feed-item"
-                style={{ borderBottom: "none", cursor: "pointer" }}
-                onClick={() =>
-                  handleQuickAction(
-                    `Research what's trending on Hacker News around our space. Draft a Show HN post for ${brand.title}.`,
-                  )
-                }
-              >
-                <div className="feed-item-header">
-                  <div className="feed-icon hn">
-                    <span style={{ color: "#fff", fontWeight: "bold" }}>Y</span>
-                  </div>
-                  <div className="feed-content">
-                    <div className="feed-title">Hacker News</div>
-                    <div className="feed-desc">Click to draft Show HN</div>
-                  </div>
-                  <ChevronRight
-                    className="feed-chevron"
-                    style={{ width: 16, height: 16 }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div
-              className="card"
-              style={{ flex: 1, display: "flex", flexDirection: "column" }}
-            >
-              <div className="card-header pl-4 pr-4 border-b">
-                <span>Chat with AI CMO</span>
-                {isStreaming && (
-                  <button
-                    type="button"
-                    onClick={stopStreaming}
-                    className="text-xs"
-                    style={{
-                      background: "var(--danger-bg)",
-                      color: "var(--danger)",
-                      border: "1px solid var(--danger)",
-                      borderRadius: 6,
-                      padding: "2px 8px",
-                      cursor: "pointer",
-                      fontSize: "0.75rem",
-                    }}
-                  >
-                    Stop
-                  </button>
-                )}
-              </div>
-              <div className="chat-messages">
-                {messages.length === 0 && (
-                  <div className="chat-empty">
-                    <Sparkles
-                      style={{
-                        width: 24,
-                        height: 24,
-                        color: "var(--muted)",
-                        marginBottom: 8,
-                      }}
-                    />
-                    <div className="text-sm text-muted" style={{ textAlign: "center" }}>
-                      Ask me anything about marketing {brand.title}.
-                      <br />I research real data before answering.
-                    </div>
-                  </div>
-                )}
-                {messages.map((msg) => (
-                  <ChatMessageBubble key={msg.id} msg={msg} />
-                ))}
-                <div ref={chatEndRef} />
-              </div>
-              <form onSubmit={handleChatSubmit} className="chat-input-wrapper">
-                <input
-                  ref={chatInputRef}
-                  type="text"
-                  className="chat-input"
-                  placeholder={
-                    isAuthLoading
-                      ? "Checking your session..."
-                      : isLocked
-                        ? "Sign in to ask the AI CMO..."
-                        : isStreaming
-                          ? "Waiting for response..."
-                          : "Ask me anything..."
-                  }
-                  value={chatInput}
-                  onChange={(event) => {
-                    if (!isLocked) {
-                      setChatInput(event.target.value);
-                    }
-                  }}
-                  onFocus={() => {
-                    if (isLocked) {
-                      openAuthModal();
-                    }
-                  }}
-                  disabled={isStreaming || isAuthLoading}
-                  readOnly={isLocked}
-                />
-                <button
-                  type="submit"
-                  className="chat-submit"
-                  disabled={isStreaming || isAuthLoading || !chatInput.trim()}
-                  style={{
-                    opacity:
-                      isStreaming || isAuthLoading || !chatInput.trim() ? 0.4 : 1,
-                  }}
-                >
-                  <ArrowUp style={{ width: 16, height: 16 }} />
-                </button>
-              </form>
-            </div>
-          </div>
         </div>
       )}
 

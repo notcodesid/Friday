@@ -462,7 +462,7 @@ textarea {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 280px 1fr 340px;
+  grid-template-columns: 280px 1fr;
   gap: 24px;
   padding: 24px;
   flex: 1;
@@ -470,7 +470,7 @@ textarea {
 
 @media (max-width: 1200px) {
   .dashboard-grid {
-    grid-template-columns: 260px 1fr 300px;
+    grid-template-columns: 260px 1fr;
     gap: 16px;
     padding: 16px;
   }
@@ -568,6 +568,95 @@ textarea {
   width: 14px;
   height: 14px;
   border-radius: 2px;
+}
+
+.competitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.competitor-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.competitor-item:hover {
+  background-color: var(--card-hover);
+}
+
+.competitor-item-button {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: default;
+}
+
+.competitor-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.competitor-copy-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.competitor-name {
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.competitor-domain,
+.competitor-reason,
+.competitor-positioning {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.competitor-domain {
+  word-break: break-all;
+}
+
+.competitor-chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.competitor-remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.competitor-remove-btn:hover {
+  color: var(--ink);
 }
 
 /* Tabs */
@@ -928,3 +1017,76 @@ textarea {
 .p-2 { padding: 8px; }
 .border-b { border-bottom: 1px solid var(--border); }
 .w-full { width: 100%; }
+
+/* ------------------------------------------------------------------ */
+/*  Analysis Pipeline                                                   */
+/* ------------------------------------------------------------------ */
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.step-indicator + .step-indicator {
+  border-top: 1px solid var(--border);
+}
+
+.step-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.step-label {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.step-indicator.pending .step-label {
+  color: var(--muted);
+}
+
+.step-indicator.done .step-icon {
+  color: var(--success);
+}
+
+.step-indicator.running .step-icon {
+  color: var(--accent);
+}
+
+.analysis-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent);
+}
+
+.analysis-tag.strength-tag {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+}
+
+.analysis-tag.weakness-tag {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+}
+
+.analysis-list-item {
+  font-size: 0.8rem;
+  color: var(--ink);
+  padding: 3px 0;
+  line-height: 1.5;
+}
+
+.analysis-list-item::before {
+  content: "\2022";
+  color: var(--muted);
+  margin-right: 8px;
+}

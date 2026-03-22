@@ -35,6 +35,19 @@ export const contentDraftSchema = z.object({
   sourcePillar: z.string(),
 });
 
+export const competitorRecordSchema = z.object({
+  name: z.string(),
+  domain: z.string(),
+  logo: z.string().url().optional(),
+  reason: z.string(),
+  positioning: z.string().optional(),
+});
+
+export const competitorDiscoverySchema = z.object({
+  summary: z.string().optional(),
+  competitors: z.array(competitorRecordSchema).max(8),
+});
+
 export const distributionPlanSchema = z.object({
   summary: z.string(),
   siteProfile: z.object({
@@ -85,7 +98,59 @@ export const distributionPlanSchema = z.object({
   nextActions: z.array(z.string()).min(3).max(6),
 });
 
+/* ------------------------------------------------------------------ */
+/*  Analysis pipeline schemas                                          */
+/* ------------------------------------------------------------------ */
+
+export const productAnalysisSchema = z.object({
+  brandName: z.string(),
+  oneLiner: z.string(),
+  positioning: z.string(),
+  targetAudience: z.array(z.string()).max(4),
+  painPoints: z.array(z.string()).max(6),
+  differentiators: z.array(z.string()).max(6),
+  primaryCta: z.string(),
+  brandVoice: z.array(z.string()).max(4),
+  techStack: z.array(z.string()).max(6),
+  socialLinks: z
+    .array(z.object({ platform: z.string(), url: z.string() }))
+    .max(8),
+});
+
+export const competitorAnalysisSchema = z.object({
+  name: z.string(),
+  domain: z.string(),
+  positioning: z.string(),
+  targetAudience: z.string(),
+  strengths: z.array(z.string()).max(6),
+  weaknesses: z.array(z.string()).max(6),
+  contentStrategy: z.object({
+    channels: z.array(z.string()).max(6),
+    themes: z.array(z.string()).max(6),
+    tone: z.string(),
+    cadence: z.string().optional(),
+  }),
+  pricingModel: z.string().optional(),
+  techStack: z.array(z.string()).max(6),
+});
+
+export const competitiveInsightsSchema = z.object({
+  opportunities: z.array(z.string()).max(6),
+  gaps: z.array(z.string()).max(6),
+  recommendations: z.array(z.string()).max(6),
+  positioningAdvice: z.string(),
+});
+
+/* ------------------------------------------------------------------ */
+/*  Inferred types                                                     */
+/* ------------------------------------------------------------------ */
+
 export type AgentRunInput = z.infer<typeof agentRunInputSchema>;
 export type Channel = z.infer<typeof channelSchema>;
+export type CompetitorDiscovery = z.infer<typeof competitorDiscoverySchema>;
+export type CompetitorRecord = z.infer<typeof competitorRecordSchema>;
 export type SiteContext = z.infer<typeof siteContextSchema>;
 export type DistributionPlan = z.infer<typeof distributionPlanSchema>;
+export type ProductAnalysis = z.infer<typeof productAnalysisSchema>;
+export type CompetitorAnalysis = z.infer<typeof competitorAnalysisSchema>;
+export type CompetitiveInsights = z.infer<typeof competitiveInsightsSchema>;
