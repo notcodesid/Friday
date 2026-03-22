@@ -1,7 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 import { getAnthropicClient } from "@/lib/agents/core/client";
-import { runCompetitorDiscoveryAgent } from "@/lib/agents/competitor-discovery";
+import {
+  runCompetitorDiscoveryAgent,
+  runGeminiDeepCompetitorResearch,
+  type GeminiDeepCompetitorResearch,
+} from "@/lib/agents/competitor-discovery";
 import {
   productAnalysisSchema,
   competitorAnalysisSchema,
@@ -211,8 +215,34 @@ export function runAnalyzePipeline(
         });
       }
 
-      /* ---- Step 3: Competitor Deep Analysis ---- */
+      /* ---- Step 3: Competitor Deep Analysis (Gemini Deep Research + Claude) ---- */
       const analyses: CompetitorAnalysis[] = [];
+
+      // Run Gemini deep research on all competitors in parallel for speed
+      emit("step", {
+        step: 3,
+        status: "running",
+        label: "Deep researching all competitors with Gemini...",
+      });
+
+      const deepResearchResults = await Promise.allSettled(
+        competitors.map((competitor) =>
+          runGeminiDeepCompetitorResearch(
+            competitor.name,
+            competitor.domain,
+            productAnalysis?.brandName ?? new URL(input.siteUrl).hostname,
+            productAnalysis?.oneLiner,
+          ),
+        ),
+      );
+
+      const geminiResearch = new Map<string, GeminiDeepCompetitorResearch>();
+      for (let i = 0; i < competitors.length; i++) {
+        const result = deepResearchResults[i];
+        if (result.status === "fulfilled" && result.value) {
+          geminiResearch.set(competitors[i].domain, result.value);
+        }
+      }
 
       for (const competitor of competitors) {
         try {
@@ -222,20 +252,47 @@ export function runAnalyzePipeline(
             label: `Analyzing ${competitor.name}...`,
           });
 
-          const competitorBrand = await analyzeBrand(
-            `https://${competitor.domain}`,
-          );
+          const deepResearch = geminiResearch.get(competitor.domain);
+
+          // If we have Gemini deep research, use it as primary intelligence
+          // Otherwise fall back to basic brand scraping
+          let competitorIntel: string;
+          if (deepResearch) {
+            competitorIntel = [
+              `## Gemini Deep Research Results for ${competitor.name}`,
+              `Positioning: ${deepResearch.positioning}`,
+              `Target Audience: ${deepResearch.targetAudience}`,
+              `Key Features: ${deepResearch.keyFeatures.join(", ")}`,
+              deepResearch.pricingModel ? `Pricing Model: ${deepResearch.pricingModel}` : "",
+              deepResearch.pricingDetails ? `Pricing Details: ${deepResearch.pricingDetails}` : "",
+              `Strengths: ${deepResearch.strengths.join("; ")}`,
+              `Weaknesses: ${deepResearch.weaknesses.join("; ")}`,
+              deepResearch.fundingAndScale ? `Funding/Scale: ${deepResearch.fundingAndScale}` : "",
+              `Content Channels: ${deepResearch.contentStrategy.channels.join(", ")}`,
+              `Content Themes: ${deepResearch.contentStrategy.themes.join(", ")}`,
+              `Brand Tone: ${deepResearch.contentStrategy.tone}`,
+              deepResearch.contentStrategy.cadence ? `Publishing Cadence: ${deepResearch.contentStrategy.cadence}` : "",
+              deepResearch.recentActivity?.length ? `Recent Activity: ${deepResearch.recentActivity.join("; ")}` : "",
+              deepResearch.marketPosition ? `Market Position: ${deepResearch.marketPosition}` : "",
+            ].filter(Boolean).join("\n");
+          } else {
+            const competitorBrand = await analyzeBrand(
+              `https://${competitor.domain}`,
+            );
+            competitorIntel = `## Scraped Website Data\n${JSON.stringify(competitorBrand)}`;
+          }
 
           const response = await client.messages.create({
             model: env.model,
             max_tokens: 2048,
             temperature: 0.5,
-            system:
-              "You are a competitive intelligence analyst. Analyze a competitor's website data and produce a structured assessment. Be specific — cite real features, copy, and positioning from their site. Compare to the user's product where relevant.",
+            system: deepResearch
+              ? "You are a competitive intelligence analyst. You have been given DEEP research data about a competitor gathered from multiple sources (their website, reviews, news, social media). Synthesize this into a structured competitive assessment. Be specific — cite the real data you've been given. Compare to the user's product where relevant."
+              : "You are a competitive intelligence analyst. Analyze a competitor's website data and produce a structured assessment. Be specific — cite real features, copy, and positioning from their site. Compare to the user's product where relevant.",
             messages: [
               {
                 role: "user",
-                content: `Analyze this competitor:\n\nCompetitor: ${competitor.name} (${competitor.domain})\nCompetitor data: ${JSON.stringify(competitorBrand)}\n\nOur product for comparison:\n${JSON.stringify(productAnalysis)}`,
+                content: `Analyze this competitor:\n\nCompetitor: ${competitor.name} (${competitor.domain})\n\n${competitorIntel}\n\nOur product for comparison:\n${JSON.stringify(productAnalysis)}`,
               },
             ],
             tools: [

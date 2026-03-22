@@ -4,7 +4,7 @@ import { runCompetitorDiscoveryAgent } from "@/lib/agents/competitor-discovery";
 import { requireSession } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 type DiscoverRequest = {
   brandName: string;

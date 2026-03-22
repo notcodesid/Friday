@@ -8,9 +8,10 @@ import type { FridayContext } from "@/lib/agents/core/context";
 import { buildCMOInstructions } from "@/lib/agents/cmo";
 import { buildContentStrategistInstructions } from "@/lib/agents/content-strategist";
 import { buildCompetitorAnalystInstructions } from "@/lib/agents/competitor-analyst";
+import { buildReggitInstructions } from "@/lib/agents/reggit";
 import { env } from "@/lib/env";
 
-export type FridayAgentId = "cmo" | "content-strategist" | "competitor-analyst";
+export type FridayAgentId = "cmo" | "content-strategist" | "competitor-analyst" | "reggit";
 
 function buildAgents(
   context: FridayContext,
@@ -18,13 +19,13 @@ function buildAgents(
   return {
     cmo: {
       description:
-        "AI Chief Marketing Officer — understands marketing needs, provides strategy, and delegates to specialist agents for execution.",
+        "AI marketing operator — understands marketing needs, provides strategy, and coordinates research-to-publishing execution.",
       prompt: buildCMOInstructions(context),
       tools: ["WebSearch", "WebFetch", "Agent"],
     },
     "content-strategist": {
       description:
-        "Content creation specialist — creates blog posts, social media copy, email campaigns using real web research.",
+        "Content creation specialist — creates blog posts, social media copy, email campaigns, and OpenClock-ready social packages using real web research.",
       prompt: buildContentStrategistInstructions(context),
       tools: ["WebSearch", "WebFetch"],
     },
@@ -32,6 +33,12 @@ function buildAgents(
       description:
         "Competitive intelligence specialist — analyzes competitor websites, positioning, content strategy, and market gaps.",
       prompt: buildCompetitorAnalystInstructions(context),
+      tools: ["WebSearch", "WebFetch"],
+    },
+    reggit: {
+      description:
+        "Reddit marketing and community intelligence specialist — finds subreddits, crafts Reddit-native content, and plans community engagement strategies.",
+      prompt: buildReggitInstructions(context),
       tools: ["WebSearch", "WebFetch"],
     },
   };

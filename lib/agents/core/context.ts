@@ -18,6 +18,12 @@ export type FridayContext = {
   campaignGoal?: string;
   /** Known competitor domains */
   competitors?: string[];
+  /** Active product or campaign theme */
+  brandTheme?: string;
+  /** Priority distribution channels for the current workflow */
+  preferredChannels?: string[];
+  /** Publishing system used to schedule or upload content */
+  publishingTool?: string;
   /** Free-form operator notes */
   notes?: string;
 };

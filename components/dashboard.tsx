@@ -17,6 +17,7 @@ import {
 type ViewType =
   | "home"
   | "company-report"
+  | "marketing-console"
   | "product-information"
   | "competitor-analysis"
   | "brand-voice"
@@ -29,12 +30,19 @@ import type {
   CompetitorAnalysis,
   CompetitiveInsights,
 } from "@/lib/agents/schemas";
+import type { FridayContext } from "@/lib/agents/core/context";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type BrandMeta = {
   title: string;
   description: string;
   favicon: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
 };
 
 function normalizeSiteUrl(value: string) {
@@ -264,6 +272,54 @@ const initialAnalysisState: AnalysisState = {
   insights: null,
   errors: [],
 };
+
+function buildMarketingContext({
+  brand,
+  brandVoiceDoc,
+  competitors,
+  productAnalysis,
+  insights,
+  siteUrl,
+}: {
+  brand: BrandMeta;
+  brandVoiceDoc: BrandVoiceDoc | null;
+  competitors: CompetitorRecord[];
+  productAnalysis: ProductAnalysis | null;
+  insights: CompetitiveInsights | null;
+  siteUrl: string | null;
+}): FridayContext {
+  const voiceSignals = [
+    ...(productAnalysis?.brandVoice ?? []),
+    ...(brandVoiceDoc?.principles.map((principle) => principle.label) ?? []),
+  ];
+
+  const uniqueVoiceSignals = [...new Set(voiceSignals)].slice(0, 6);
+  const notes = [
+    "Default publishing workflow uses OpenClock.",
+    "Primary social channel is LinkedIn unless the operator asks for another platform.",
+    brandVoiceDoc?.identity ? `Voice identity: ${brandVoiceDoc.identity}` : undefined,
+    insights?.positioningAdvice
+      ? `Positioning advice: ${insights.positioningAdvice}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    brandName: productAnalysis?.brandName ?? brand.title,
+    oneLiner: productAnalysis?.oneLiner ?? brand.description,
+    targetAudience: productAnalysis?.targetAudience.join(", "),
+    siteUrl: siteUrl ?? undefined,
+    brandVoice: uniqueVoiceSignals,
+    campaignGoal:
+      "Turn research into publish-ready social content and OpenClock upload handoff.",
+    competitors: competitors.map((competitor) => competitor.domain),
+    brandTheme: "Marketing operator",
+    preferredChannels: ["LinkedIn", "X"],
+    publishingTool: "OpenClock",
+    notes,
+  };
+}
 
 function useAnalysisPipeline({
   accessToken,
@@ -670,6 +726,9 @@ function AuthModal({
 
 export function Dashboard({ authEnabled }: DashboardProps) {
   const [terminalInput, setTerminalInput] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
   const [currentSiteUrl, setCurrentSiteUrl] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authLoadingState, setAuthLoadingState] = useState(authEnabled);
@@ -699,6 +758,9 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   });
 
   const currentDomain = currentSiteUrl ? getSiteDomain(currentSiteUrl) : "";
+  const workspaceDomain = currentDomain.replace(/^www\./, "");
+  const workspaceTitle =
+    brand.title && brand.title !== "Website" ? brand.title : workspaceDomain || "Workspace";
   const insightCount = analysis.insights
     ? analysis.insights.opportunities.length +
       analysis.insights.gaps.length +
@@ -710,6 +772,12 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     status?: string;
     complete?: boolean;
   }> = [
+    {
+      view: "marketing-console",
+      label: "Marketing Console",
+      status: chatMessages.length > 0 ? `${chatMessages.length} messages` : "Ready",
+      complete: chatMessages.length > 0,
+    },
     {
       view: "company-report",
       label: "Company Report",
@@ -748,34 +816,51 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   ];
   const landingSections = [
     {
+      label: "Marketing Console",
+      note: "Research-backed social posts and OpenClock handoff",
+      tag: "Primary",
+    },
+    {
       label: "Company Report",
       note: "Overview, domain, and workspace status",
+      tag: "Overview",
     },
     {
       label: "Product Information",
       note: "Positioning, audience, and differentiators",
+      tag: "Product",
     },
     {
       label: "Competitor Analysis",
       note: "Tracked brands and comparison notes",
+      tag: "Landscape",
     },
     {
       label: "Brand Voice",
       note: "Messaging rules, tone, and examples",
+      tag: "Messaging",
     },
     {
       label: "Strategic Insights",
       note: "Opportunities, gaps, and next moves",
+      tag: "Strategy",
     },
   ];
+  const [featuredLandingSection, ...supportingLandingSections] = landingSections;
   const landingExamples = [
     "https://linear.app",
     "https://www.notion.so",
     "https://www.reddit.com",
   ];
+  const marketingPromptSuggestions = [
+    `Create a LinkedIn launch post for ${brand.title} and package it for OpenClock upload.`,
+    `Turn ${brand.title}'s positioning into a 3-post LinkedIn series with OpenClock-ready handoff.`,
+    `Write a founder-style social post for ${brand.title} based on the strongest competitive angle.`,
+  ];
 
   const terminalInputRef = useRef<HTMLInputElement>(null);
   const authMenuRef = useRef<HTMLDivElement>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
 
   const openAuthModal = useCallback(() => {
     setIsAuthMenuOpen(false);
@@ -785,6 +870,104 @@ export function Dashboard({ authEnabled }: DashboardProps) {
   const closeAuthModal = useCallback(() => {
     setIsAuthModalOpen(false);
   }, []);
+
+  const runMarketingPrompt = useCallback(
+    async (rawPrompt: string) => {
+      const prompt = rawPrompt.trim();
+      if (!prompt || isChatLoading) {
+        return;
+      }
+
+      const assistantMessageId = `assistant-${Date.now()}`;
+      const brandContext = buildMarketingContext({
+        brand,
+        brandVoiceDoc,
+        competitors,
+        productAnalysis: analysis.productAnalysis,
+        insights: analysis.insights,
+        siteUrl: currentSiteUrl,
+      });
+
+      setCurrentView("marketing-console");
+      setChatMessages((prev) => [
+        ...prev,
+        { id: `user-${Date.now()}`, role: "user", content: prompt },
+        { id: assistantMessageId, role: "assistant", content: "" },
+      ]);
+      setIsChatLoading(true);
+      setChatInput("");
+      setTerminalError(null);
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(session?.access_token
+              ? { Authorization: `Bearer ${session.access_token}` }
+              : {}),
+          },
+          body: JSON.stringify({
+            message: prompt,
+            agentId: "cmo",
+            brandContext,
+          }),
+        });
+
+        if (!res.ok || !res.body) {
+          const errorBody = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(errorBody.error ?? `Request failed: ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          const chunk = decoder.decode(value, { stream: true });
+          if (!chunk) {
+            continue;
+          }
+
+          setChatMessages((prev) =>
+            prev.map((message) =>
+              message.id === assistantMessageId
+                ? { ...message, content: `${message.content}${chunk}` }
+                : message,
+            ),
+          );
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Marketing console request failed.";
+        setChatMessages((prev) =>
+          prev.map((entry) =>
+            entry.id === assistantMessageId
+              ? { ...entry, content: `Error: ${message}` }
+              : entry,
+          ),
+        );
+      } finally {
+        setIsChatLoading(false);
+      }
+    },
+    [
+      analysis.insights,
+      analysis.productAnalysis,
+      brandVoiceDoc,
+      brand,
+      competitors,
+      currentSiteUrl,
+      isChatLoading,
+      session?.access_token,
+    ],
+  );
 
   const generateBrandVoice = useCallback(async () => {
     if (!currentSiteUrl || isBrandVoiceLoading) return;
@@ -972,8 +1155,20 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     setBrandVoiceDoc(null);
     setBrandVoiceError(null);
     setIsBrandVoiceLoading(false);
+    setChatMessages([]);
+    setChatInput("");
+    setIsChatLoading(false);
     setCurrentView("home");
   }, [currentSiteUrl]);
+
+  useEffect(() => {
+    const container = chatMessagesRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
+  }, [chatMessages, isChatLoading]);
 
   useEffect(() => {
     if (isLocked || isAuthLoading) {
@@ -1034,6 +1229,23 @@ export function Dashboard({ authEnabled }: DashboardProps) {
     setCurrentSiteUrl(nextSiteUrl);
     setTerminalInput("");
     void analysis.startAnalysis(nextSiteUrl);
+  }
+
+  function handleChatSubmit(event?: FormEvent, presetPrompt?: string) {
+    event?.preventDefault();
+
+    if (isLocked) {
+      openAuthModal();
+      return;
+    }
+
+    if (!currentSiteUrl) {
+      setTerminalError("Load a website before using the marketing console.");
+      return;
+    }
+
+    const prompt = presetPrompt ?? chatInput;
+    void runMarketingPrompt(prompt);
   }
 
   function addCompetitor(domain: string) {
@@ -1246,7 +1458,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
           <div className="dashboard-brand-copy">
             <div className="dashboard-brand-name">Friday</div>
             <div className="dashboard-brand-subtitle">
-              Clean company intelligence, one website at a time
+              Research, write, and package social content
             </div>
           </div>
         </div>
@@ -1270,40 +1482,60 @@ export function Dashboard({ authEnabled }: DashboardProps) {
             <section className="card landing-story-card">
               <div className="card-body landing-story-body">
                 <div className="section-kicker">Homepage</div>
-                <h1 className="landing-title">Keep the home screen clean.</h1>
+                <h1 className="landing-title">From website to marketing engine.</h1>
                 <p className="landing-lead">
-                  Friday turns one company URL into a structured workspace. The
-                  homepage stays simple, and the deeper work opens in separate pages
-                  for report, product, competitors, voice, and strategy.
+                  Friday turns one company URL into a marketing workspace. It
+                  organizes research, positioning, competitors, voice, and a
+                  dedicated console for generating LinkedIn-ready posts with
+                  OpenClock upload handoff.
                 </p>
 
-                <div className="landing-metrics">
-                  <div className="landing-metric">
-                    <span className="landing-metric-value">5</span>
-                    <span className="landing-metric-label">focused pages</span>
-                  </div>
-                  <div className="landing-metric">
-                    <span className="landing-metric-value">1</span>
-                    <span className="landing-metric-label">homepage view</span>
-                  </div>
-                  <div className="landing-metric">
-                    <span className="landing-metric-value">0</span>
-                    <span className="landing-metric-label">unnecessary clutter</span>
-                  </div>
-                </div>
-
-                <div className="landing-outline-list">
-                  {landingSections.map((section) => (
-                    <div key={section.label} className="landing-outline-item">
-                      <div className="landing-outline-icon">
-                        <FileText className="icon" />
-                      </div>
-                      <div className="landing-outline-copy">
-                        <div className="landing-outline-title">{section.label}</div>
-                        <div className="landing-outline-note">{section.note}</div>
+                <div className="landing-structure">
+                  <div className="landing-structure-header">
+                    <div>
+                      <div className="landing-structure-title">Workspace sections</div>
+                      <div className="landing-structure-note">
+                        One clear homepage, then dedicated pages for the deeper work.
                       </div>
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="landing-feature-card">
+                    <div className="landing-feature-icon">
+                      <FileText className="icon" />
+                    </div>
+                    <div className="landing-feature-copy">
+                      <div className="landing-feature-topline">
+                        <span className="landing-feature-badge">
+                          {featuredLandingSection.tag}
+                        </span>
+                        <span className="landing-feature-title">
+                          {featuredLandingSection.label}
+                        </span>
+                      </div>
+                      <div className="landing-feature-note">
+                        {featuredLandingSection.note}
+                      </div>
+                    </div>
+                    <ChevronRight
+                      style={{ width: 18, height: 18, color: "var(--accent-strong)" }}
+                    />
+                  </div>
+
+                  <div className="landing-section-grid">
+                    {supportingLandingSections.map((section, index) => (
+                      <div key={section.label} className="landing-section-card">
+                        <div className="landing-section-top">
+                          <span className="landing-section-index">
+                            {String(index + 2).padStart(2, "0")}
+                          </span>
+                          <span className="landing-section-tag">{section.tag}</span>
+                        </div>
+                        <div className="landing-section-title">{section.label}</div>
+                        <div className="landing-section-note">{section.note}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </section>
@@ -1313,8 +1545,9 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                 <div className="section-kicker">Start Here</div>
                 <div className="landing-panel-title">Paste a company website</div>
                 <p className="landing-panel-copy">
-                  Friday will build the workspace, load the report structure, and
-                  keep the rest of the analysis organized in dedicated pages.
+                  Friday will build the workspace, map the brand context, and
+                  give you a marketing console for content creation and publishing
+                  handoff.
                 </p>
 
                 {isLocked && (
@@ -1425,13 +1658,19 @@ export function Dashboard({ authEnabled }: DashboardProps) {
           <div className="card-body workspace-bar-body">
             <div className="workspace-bar-copy">
               <div className="section-kicker">Current Workspace</div>
-              <div className="workspace-bar-title">{terminalSessionName}</div>
-              <p className="workspace-bar-text">
-                Switch the website here without changing the cleaner report layout.
-              </p>
+              <div className="workspace-bar-title">{workspaceTitle}</div>
+              <p className="workspace-bar-text">{currentSiteUrl}</p>
             </div>
 
-            <div className="workspace-bar-controls">
+            <div className="workspace-bar-summary">
+              <div className="workspace-bar-badges">
+                <span className="status-chip status-chip-accent">{terminalStatus}</span>
+                {workspaceDomain && <span className="status-chip">{workspaceDomain}</span>}
+                {analysis.currentStep > 0 && analysis.currentStep <= 4 && (
+                  <span className="status-chip">Step {analysis.currentStep} of 4</span>
+                )}
+              </div>
+
               {isLocked && (
                 <div className="auth-lock-panel">
                   <div className="auth-lock-copy">
@@ -1448,53 +1687,6 @@ export function Dashboard({ authEnabled }: DashboardProps) {
               )}
 
               {visibleAuthError && <div className="auth-inline-error">{visibleAuthError}</div>}
-
-              <form onSubmit={handleTerminalSubmit} className="workspace-bar-form">
-                <div className="workspace-input-shell">
-                  <div className="workspace-input-prefix">
-                    {analysis.isRunning ? (
-                      <span className="terminal-cursor" />
-                    ) : (
-                      <span>&gt;</span>
-                    )}
-                  </div>
-                  <input
-                    ref={terminalInputRef}
-                    type="text"
-                    value={terminalInput}
-                    onChange={(event) => {
-                      if (!isLocked) {
-                        setTerminalInput(event.target.value);
-                        setTerminalError(null);
-                      }
-                    }}
-                    onFocus={() => {
-                      if (isLocked) {
-                        openAuthModal();
-                      }
-                    }}
-                    disabled={isAuthLoading}
-                    readOnly={isLocked}
-                    placeholder={
-                      isAuthLoading
-                        ? "Checking your session..."
-                        : isLocked
-                          ? "Sign in to start a protected session..."
-                          : analysis.isRunning
-                            ? "Analyzing website..."
-                            : "Paste another website URL..."
-                    }
-                    className="workspace-input"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="auth-primary-btn workspace-submit-button"
-                  disabled={isAuthLoading || analysis.isRunning}
-                >
-                  {analysis.isRunning ? "Running..." : "Update"}
-                </button>
-              </form>
             </div>
           </div>
         </div>
@@ -1519,7 +1711,7 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                     <h1 className="report-title">{brand.title}</h1>
                     <p className="report-lead">
                       {brand.description ||
-                        "Friday is organizing the company summary into dedicated pages so the homepage stays clean."}
+                        "Friday is organizing the brand research and publishing workflow into dedicated pages."}
                     </p>
                   </div>
                 </div>
@@ -1607,6 +1799,32 @@ export function Dashboard({ authEnabled }: DashboardProps) {
               </section>
 
               <div className="report-preview-grid">
+                <button
+                  type="button"
+                  className="card report-preview-card"
+                  onClick={() => setCurrentView("marketing-console")}
+                >
+                  <div className="card-header">
+                    <div className="section-heading">
+                      <div className="section-kicker">Operator</div>
+                      <span>Marketing console</span>
+                    </div>
+                    <ChevronRight style={{ width: 16, height: 16, color: "var(--muted)" }} />
+                  </div>
+                  <div className="card-body">
+                    <p className="report-copy">
+                      {chatMessages.length > 0
+                        ? truncateText(
+                            chatMessages[chatMessages.length - 1]?.content ||
+                              "Open the console to continue the current content workflow.",
+                            160,
+                          ) ||
+                          "Open the console to continue the current content workflow."
+                        : "Generate LinkedIn posts, campaign angles, and OpenClock-ready upload packets from the current brand context."}
+                    </p>
+                  </div>
+                </button>
+
                 <button
                   type="button"
                   className="card report-preview-card"
@@ -1782,6 +2000,151 @@ export function Dashboard({ authEnabled }: DashboardProps) {
                     </div>
                   </div>
                 </div>
+              </section>
+            </div>
+
+            {renderSidebar()}
+          </div>
+        </div>
+      )}
+
+      {isSiteLoaded && currentView === "marketing-console" && (
+        <div className="report-shell">
+          <div className="detail-page-layout">
+            <div className="report-main">
+              <button
+                type="button"
+                className="back-button"
+                onClick={() => setCurrentView("home")}
+              >
+                <ArrowLeft style={{ width: 16, height: 16 }} />
+                <span>Back to home</span>
+              </button>
+
+              <section className="card report-section">
+                <div className="card-header">
+                  <div className="section-heading">
+                    <div className="section-kicker">Operator</div>
+                    <span>Marketing console</span>
+                  </div>
+                </div>
+                <div className="card-body">
+                  <div className="report-summary-block">
+                    <div className="font-semibold text-sm">
+                      Research-driven content execution for {brand.title}
+                    </div>
+                    <div className="text-sm text-muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
+                      Ask Friday to draft social posts, messaging angles, campaign variants,
+                      or LinkedIn-ready copy. Responses are packaged for OpenClock/manual
+                      upload. Live publishing is not connected in this build.
+                    </div>
+                    <div className="flex" style={{ flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                      <span className="status-chip status-chip-accent">OpenClock handoff</span>
+                      <span className="status-chip">
+                        {analysis.productAnalysis ? "Brand context loaded" : "Basic brand context"}
+                      </span>
+                      <span className="status-chip">
+                        {brandVoiceDoc ? "Voice guide attached" : "Voice guide optional"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 18 }}>
+                    <div className="text-xs text-muted" style={{ marginBottom: 10 }}>
+                      Quick prompts
+                    </div>
+                    <div className="landing-example-list">
+                      {marketingPromptSuggestions.map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          className="landing-example-chip"
+                          disabled={isChatLoading}
+                          onClick={() => handleChatSubmit(undefined, prompt)}
+                        >
+                          {truncateText(prompt, 72)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  ref={chatMessagesRef}
+                  className="chat-messages"
+                  style={{
+                    borderTop: "1px solid var(--border)",
+                    minHeight: 320,
+                    maxHeight: 620,
+                  }}
+                >
+                  {chatMessages.length === 0 ? (
+                    <div className="chat-empty">
+                      <div className="text-sm font-semibold">No content requests yet</div>
+                      <div
+                        className="text-sm text-muted"
+                        style={{ marginTop: 8, maxWidth: 520, textAlign: "center", lineHeight: 1.7 }}
+                      >
+                        Start with a LinkedIn post, a short campaign sequence, or a
+                        founder-style announcement. Friday will use the loaded research
+                        and return a publish-ready package.
+                      </div>
+                    </div>
+                  ) : (
+                    chatMessages.map((message) => (
+                      <div
+                        key={message.id}
+                        className={`chat-msg${
+                          message.role === "user" ? " chat-msg-user" : ""
+                        }`}
+                      >
+                        <div
+                          className={`chat-msg-avatar ${
+                            message.role === "user"
+                              ? "user-msg-avatar"
+                              : "assistant-msg-avatar"
+                          }`}
+                        >
+                          {message.role === "user" ? "U" : "FR"}
+                        </div>
+                        <div className="chat-msg-content">
+                          <div className="chat-msg-text">{message.content}</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+
+                  {isChatLoading && (
+                    <div className="chat-msg">
+                      <div className="chat-msg-avatar assistant-msg-avatar">FR</div>
+                      <div className="chat-msg-content">
+                        <div className="chat-typing text-sm text-muted">
+                          <Loader2 className="spin" style={{ width: 14, height: 14 }} />
+                          Building the content package...
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <form className="chat-input-wrapper" onSubmit={handleChatSubmit}>
+                  <input
+                    type="text"
+                    className="chat-input"
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder="Ask for a LinkedIn post, a content series, or an OpenClock-ready handoff..."
+                    disabled={isChatLoading}
+                  />
+                  <button
+                    type="submit"
+                    className="chat-submit"
+                    disabled={isChatLoading || !chatInput.trim()}
+                    aria-label="Send prompt"
+                  >
+                    <ChevronRight style={{ width: 18, height: 18 }} />
+                  </button>
+                </form>
               </section>
             </div>
 

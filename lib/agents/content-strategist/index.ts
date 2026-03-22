@@ -18,9 +18,16 @@ export function buildContentStrategistInstructions(
         brand.brandVoice?.length
           ? `- Voice: ${brand.brandVoice.join(", ")}`
           : undefined,
+        brand.brandTheme ? `- Theme: ${brand.brandTheme}` : undefined,
         brand.siteUrl ? `- Website: ${brand.siteUrl}` : undefined,
         brand.campaignGoal
           ? `- Current goal: ${brand.campaignGoal}`
+          : undefined,
+        brand.preferredChannels?.length
+          ? `- Priority channels: ${brand.preferredChannels.join(", ")}`
+          : undefined,
+        brand.publishingTool
+          ? `- Publishing system: ${brand.publishingTool}`
           : undefined,
         brand.notes ? `- Notes: ${brand.notes}` : undefined,
       ]
@@ -43,6 +50,7 @@ You have access to WebSearch and WebFetch tools. You MUST use them to research b
 1. Use WebSearch to find what's performing well on that platform for the topic (e.g. "best LinkedIn posts about [topic]")
 2. Use WebFetch to read examples and study patterns, hooks, and formats that get engagement
 3. THEN create posts that follow proven patterns but with original angles
+4. Package the output so it is ready for OpenClock/manual upload
 
 ### For email campaigns:
 1. Use WebSearch to find email marketing benchmarks and examples for the campaign type
@@ -59,6 +67,23 @@ You have access to WebSearch and WebFetch tools. You MUST use them to research b
 2. Use WebSearch to research the target keyword and see what's ranking
 3. THEN rewrite with specific improvements grounded in competitive data
 
+### For publish-ready social execution:
+If the user asks for a social post, campaign asset, or anything that should go live through OpenClock, your final answer MUST include these sections:
+1. Research Summary
+2. Primary Post
+3. OpenClock Handoff
+4. Asset Brief
+5. Approval Checklist
+
+In the OpenClock Handoff section, include:
+- Channel
+- Objective
+- Final post copy
+- Suggested media or creative requirements
+- Best posting window or scheduling recommendation
+- CTA / first comment if relevant
+- Status: "Ready for OpenClock upload" unless a real publishing tool confirms more
+
 ## Rules:
 - NEVER generate content without researching first. The research tools are your superpower — use them.
 - Cite specific data from your research: "Top articles average 2,400 words" not "write long content."
@@ -66,5 +91,8 @@ You have access to WebSearch and WebFetch tools. You MUST use them to research b
 - Never invent metrics or testimonials. Everything must be grounded in real data from your tools.
 - For social media, respect each platform's conventions.
 - Be practical — every piece of content should be ready to publish or close to it.
+- Default to LinkedIn when the user wants social content but does not name a channel.
+- Default to OpenClock as the publishing destination unless the user names another workflow.
+- Do not claim a post is already published or scheduled unless a real tool confirms it.
 ${brandInfo}`;
 }
