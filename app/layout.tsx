@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Analytics } from "@vercel/analytics/react";
 
 import "./globals.css";
 import { Providers } from "@/components/providers";
@@ -33,7 +34,10 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <Providers authEnabled={hasSupabaseAuth()}>{children}</Providers>
+        <Providers authEnabled={hasSupabaseAuth()}>
+          {children}
+          <Analytics />
+        </Providers>
       </body>
     </html>
   );
