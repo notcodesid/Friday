@@ -4,8 +4,11 @@ import { NextResponse } from "next/server";
 import type { FridayContext } from "@/lib/agents/core/context";
 import { runFridayChat } from "@/lib/agents/friday";
 import { requireSession } from "@/lib/auth/session";
-import { getTweetPlaybook, PLAYBOOK_PDF_PATH } from "@/lib/content/tweet-playbook";
-import { env, hasAI } from "@/lib/env";
+import {
+  getTweetPlaybook,
+  getTweetPlaybookLoadError,
+} from "@/lib/content/tweet-playbook";
+import { hasAI } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -47,32 +50,6 @@ const SUCCESS_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const ERROR_CACHE_TTL_MS = 15 * 60 * 1000;
 const socialCopyCache = new Map<string, SocialCopyCacheEntry>();
 const socialCopyInFlight = new Map<string, Promise<SocialCopyResponse>>();
-const GEMINI_SOCIAL_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-const GEMINI_TIMEOUT_MS = 60_000;
-
-type GeminiResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-      }>;
-    };
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
-const socialCopyResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["instagram", "x", "linkedin"],
-  properties: {
-    instagram: { type: "string" },
-    x: { type: "string" },
-    linkedin: { type: "string" },
-  },
-} as const;
 
 export async function POST(request: Request) {
   if (!hasAI()) {
@@ -98,11 +75,17 @@ export async function POST(request: Request) {
   const tweetPlaybook = await getTweetPlaybook();
 
   if (!tweetPlaybook) {
+    const playbookLoadError = await getTweetPlaybookLoadError();
+    if (playbookLoadError) {
+      console.error("Social copy playbook load failed:", playbookLoadError);
+    }
+
     return NextResponse.json(
       {
-        error: `Social copy is disabled until the tweet playbook PDF is available at ${PLAYBOOK_PDF_PATH}.`,
+        error:
+          "Social copy is temporarily unavailable because the tweet playbook could not be loaded on the server.",
       },
-      { status: 412 },
+      { status: 503 },
     );
   }
 
@@ -307,104 +290,4 @@ function toJsonResponse(result: SocialCopyResponse) {
   }
 
   return NextResponse.json({ error: result.error }, { status: result.statusCode });
-}
-
-async function generateSocialCopyWithGemini(
-  prompt: string,
-): Promise<SocialCopyResponse> {
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SOCIAL_MODEL}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": env.geminiApiKey ?? "",
-        },
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: `${prompt}\n\nReturn valid JSON only.` }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.7,
-            responseMimeType: "application/json",
-            responseJsonSchema: socialCopyResponseJsonSchema,
-          },
-        }),
-      },
-    );
-
-    const payload = (await response.json().catch(() => ({}))) as GeminiResponse;
-    if (!response.ok) {
-      return {
-        status: "error",
-        error:
-          payload.error?.message ||
-          `Gemini social copy failed with HTTP ${response.status}.`,
-        statusCode: 502,
-      };
-    }
-
-    const rawText = extractGeminiText(payload);
-    if (!rawText) {
-      return {
-        status: "error",
-        error: "Gemini returned an empty social copy response.",
-        statusCode: 502,
-      };
-    }
-
-    const parsed = JSON.parse(rawText) as {
-      instagram?: string;
-      x?: string;
-      linkedin?: string;
-    };
-
-    const data = {
-      instagram: parsed.instagram?.trim() ?? "",
-      x: parsed.x?.trim() ?? "",
-      linkedin: parsed.linkedin?.trim() ?? "",
-      raw: rawText,
-    };
-
-    if (!isValidSocialCopy(data)) {
-      return {
-        status: "error",
-        error: "Gemini did not return valid social copy.",
-        statusCode: 502,
-      };
-    }
-
-    return {
-      status: "success",
-      data,
-      statusCode: 200,
-    };
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Gemini social copy failed.";
-    return {
-      status: "error",
-      error: message,
-      statusCode: 500,
-    };
-  }
-}
-
-function extractGeminiText(payload: GeminiResponse) {
-  const candidates = payload.candidates ?? [];
-  for (const candidate of candidates) {
-    const parts = candidate.content?.parts ?? [];
-    for (const part of parts) {
-      if (typeof part.text === "string" && part.text.trim()) {
-        return part.text;
-      }
-    }
-  }
-
-  return "";
 }
