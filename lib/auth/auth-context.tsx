@@ -50,16 +50,17 @@ export function AuthProvider({
   authEnabled: boolean;
   children: ReactNode;
 }) {
+  const browserAuthClient = authEnabled ? getSupabaseBrowserClient() : null;
   const [session, setSession] = useState<Session | null>(null);
-  const [authLoadingState, setAuthLoadingState] = useState(authEnabled);
+  const [authLoadingState, setAuthLoadingState] = useState(
+    authEnabled && Boolean(browserAuthClient),
+  );
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authError, setAuthError] = useState<string | null>(null);
   const [linkSentTo, setLinkSentTo] = useState<string | null>(null);
   const [isSendingLink, setIsSendingLink] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-
-  const browserAuthClient = authEnabled ? getSupabaseBrowserClient() : null;
 
   const authSetupError =
     authEnabled && !browserAuthClient
@@ -83,7 +84,6 @@ export function AuthProvider({
   // Listen for auth state changes
   useEffect(() => {
     if (!authEnabled || !browserAuthClient) {
-      setAuthLoadingState(false);
       return;
     }
 

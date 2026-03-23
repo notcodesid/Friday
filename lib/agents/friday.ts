@@ -68,6 +68,14 @@ export function runFridayChat(
           allowedTools: ["WebSearch", "WebFetch", "Agent"],
           includePartialMessages: true,
           persistSession: false,
+          settingSources: [],
+          env: {
+            ...process.env,
+            CLAUDE_CODE_SIMPLE: "1",
+          },
+          extraArgs: {
+            bare: null,
+          },
           thinking: { type: "disabled" },
         };
 

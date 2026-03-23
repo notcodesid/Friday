@@ -29,6 +29,15 @@ export const env = {
   supabaseServiceRoleKey:
     trimValue(process.env.SUPABASE_SERVICE_ROLE_KEY) ??
     trimValue(process.env.SUPABASE_SECRET_KEY),
+  solanaCluster:
+    trimValue(process.env.NEXT_PUBLIC_SOLANA_CLUSTER) ??
+    trimValue(process.env.SOLANA_CLUSTER),
+  solanaRpcUrl:
+    trimValue(process.env.NEXT_PUBLIC_SOLANA_RPC_URL) ??
+    trimValue(process.env.SOLANA_RPC_URL),
+  solanaMerchantWallet:
+    trimValue(process.env.NEXT_PUBLIC_SOLANA_MERCHANT_WALLET) ??
+    trimValue(process.env.SOLANA_MERCHANT_WALLET),
 };
 
 export function hasAI() {
@@ -45,4 +54,8 @@ export function hasSupabase() {
 
 export function hasSupabaseAuth() {
   return Boolean(env.supabaseUrl && env.supabaseAnonKey);
+}
+
+export function hasSolanaMerchantWallet() {
+  return Boolean(env.solanaMerchantWallet);
 }

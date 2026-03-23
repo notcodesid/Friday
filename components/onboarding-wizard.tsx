@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
+import Link from "next/link";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from "react";
 import {
   ArrowLeft,
   Check,
@@ -217,9 +224,12 @@ export function OnboardingWizard({
         <div className="mx-auto max-w-[1360px]">
           <div className="relative flex min-h-[78px] items-center justify-between rounded-full border border-white/10 bg-[#121212]/92 px-6 shadow-[0_22px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl md:px-10">
             <div className="flex items-center gap-2">
-              <div className="text-[1.15rem] font-semibold tracking-[-0.05em] text-white">
+              <Link
+                href="/"
+                className="text-[1.15rem] font-semibold tracking-[-0.05em] text-white transition hover:text-white/82"
+              >
                 Friday<span className="text-[#ff5e00]">.</span>
-              </div>
+              </Link>
             </div>
 
             <div className="pointer-events-none absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 md:block">
@@ -731,7 +741,7 @@ export function OnboardingWizard({
                   <button
                     type="button"
                     onClick={onComplete}
-                    className="inline-flex min-h-[52px] items-center justify-center rounded-full bg-[#111111] px-8 text-sm font-semibold text-white transition hover:bg-[#222222]"
+                    className="inline-flex min-h-[52px] items-center justify-center rounded-full bg-[#111111] px-8 text-sm font-semibold text-white transition hover:bg-[#222222] disabled:cursor-not-allowed disabled:opacity-30"
                   >
                     Continue
                   </button>
@@ -740,6 +750,7 @@ export function OnboardingWizard({
             </div>
           </section>
         </div>
+
       </main>
     </div>
   );

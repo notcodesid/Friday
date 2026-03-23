@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth/auth-context";
+import { SolanaPricing } from "@/components/solana-pricing";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -23,6 +24,7 @@ import { useAuth } from "@/lib/auth/auth-context";
 const NAV_ITEMS = [
   { label: "About", href: "#about" },
   { label: "Services", href: "#services" },
+  { label: "Pricing", href: "#pricing" },
   { label: "Process", href: "#process" },
   { label: "FAQ", href: "#faq" },
 ];
@@ -710,6 +712,16 @@ export function LandingPage() {
                 );
               })}
             </div>
+          </div>
+        </section>
+
+        <section id="pricing" className="border-t border-white/8 px-6 py-20 md:px-10 md:py-24">
+          <div className="mx-auto max-w-[1360px]">
+            <SolanaPricing
+              eyebrow="Pricing"
+              title="Monthly access, paid straight from a Solana wallet"
+              description="Friday now supports direct Solana payments. Users connect Phantom or another injected wallet, choose a monthly plan, and send a verified transfer to the merchant wallet tied to the product."
+            />
           </div>
         </section>
 
