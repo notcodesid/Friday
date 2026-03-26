@@ -14,7 +14,7 @@ type AnalyzeRequest = {
 export async function POST(request: Request) {
   if (!hasAI()) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY is not configured." },
+      { error: "GEMINI_API_KEY is not configured. Add to .env to enable analyze." },
       { status: 500 },
     );
   }

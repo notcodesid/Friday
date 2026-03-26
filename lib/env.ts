@@ -1,5 +1,5 @@
 const DEFAULT_SITE_URL = "https://www.tryproven.fun/";
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+const DEFAULT_MODEL = "gemini-2.0-flash";
 
 function trimValue(value?: string | null) {
   if (!value) {
@@ -10,8 +10,26 @@ function trimValue(value?: string | null) {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function parseApiKeys(value?: string | null): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((k) => trimValue(k))
+    .filter((k): k is string => Boolean(k));
+}
+
+function getGeminiKeys(): string[] {
+  const singleKey = trimValue(process.env.GEMINI_API_KEY);
+  const multiKeys = parseApiKeys(process.env.GEMINI_API_KEYS);
+  
+  if (multiKeys.length > 0) return multiKeys;
+  if (singleKey) return [singleKey];
+  return [];
+}
+
 export const env = {
   anthropicApiKey: trimValue(process.env.ANTHROPIC_API_KEY),
+  geminiApiKeys: getGeminiKeys(),
   geminiApiKey: trimValue(process.env.GEMINI_API_KEY),
   model: trimValue(process.env.AI_MODEL) ?? DEFAULT_MODEL,
   defaultSiteUrl:
@@ -41,11 +59,11 @@ export const env = {
 };
 
 export function hasAI() {
-  return Boolean(env.anthropicApiKey);
+  return Boolean(env.anthropicApiKey) || env.geminiApiKeys.length > 0;
 }
 
 export function hasGemini() {
-  return Boolean(env.geminiApiKey);
+  return env.geminiApiKeys.length > 0;
 }
 
 export function hasSupabase() {

@@ -70,7 +70,7 @@ const REQUEST_DELAY_MS = 250;
 const SEARCH_TIMEOUT_MS = 6_500;
 const GEMINI_TIMEOUT_MS = 60_000;
 const GEMINI_DEEP_RESEARCH_TIMEOUT_MS = 90_000;
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-pro";
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -666,7 +666,7 @@ async function runGeminiGroundedDiscovery(
   }
 
   const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_GEMINI_MODEL}:generateContent`;
+    `https://generativelanguage.googleapis.com/v1/models/${DEFAULT_GEMINI_MODEL}:generateContent`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -848,7 +848,7 @@ export async function runGeminiDeepCompetitorResearch(
 
   try {
     const endpoint =
-      `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_GEMINI_MODEL}:generateContent`;
+      `https://generativelanguage.googleapis.com/v1/models/${DEFAULT_GEMINI_MODEL}:generateContent`;
 
     const response = await fetch(endpoint, {
       method: "POST",

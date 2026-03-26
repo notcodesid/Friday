@@ -102,6 +102,26 @@ export type GeneratedAd = {
   prompt: string;
 };
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    return (
+      msg.includes("429") ||
+      msg.includes("rate limit") ||
+      msg.includes("quota") ||
+      msg.includes("too many requests")
+    );
+  }
+  return false;
+}
+
 export async function generateBrandAd(
   assets: BrandAssets,
   format: AdFormat,
@@ -114,7 +134,7 @@ export async function generateBrandAd(
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = process.env.GEMINI_MODEL ?? "gemini-2.0-flash-exp";
+  const modelName = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
@@ -138,30 +158,52 @@ export async function generateBrandAd(
   }
   parts.push({ text: prompt });
 
-  const result = await model.generateContent(parts);
-  const response = result.response;
-  const candidates = response.candidates;
+  let lastError: Error | null = null;
 
-  if (!candidates || candidates.length === 0) {
-    throw new Error("No response from Gemini");
-  }
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await model.generateContent(parts);
+      const response = result.response;
+      const candidates = response.candidates;
 
-  const responseParts = candidates[0].content.parts;
+      if (!candidates || candidates.length === 0) {
+        throw new Error("No response from Gemini");
+      }
 
-  for (const part of responseParts) {
-    if (part.inlineData) {
-      return {
-        format,
-        imageBase64: part.inlineData.data,
-        mimeType: part.inlineData.mimeType ?? "image/png",
-        prompt,
-      };
+      const responseParts = candidates[0].content.parts;
+
+      for (const part of responseParts) {
+        if (part.inlineData) {
+          return {
+            format,
+            imageBase64: part.inlineData.data,
+            mimeType: part.inlineData.mimeType ?? "image/png",
+            prompt,
+          };
+        }
+      }
+
+      throw new Error(
+        "Gemini did not return an image. The model may not support image generation with the current configuration.",
+      );
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      // Check if it's a rate limit error and we have retries left
+      if (isRateLimitError(error) && attempt < MAX_RETRIES) {
+        const waitTime = RETRY_DELAY_MS * attempt;
+        console.warn(
+          `Gemini rate limit hit, retrying in ${waitTime}ms (attempt ${attempt}/${MAX_RETRIES})`,
+        );
+        await sleep(waitTime);
+        continue;
+      }
+
+      throw lastError;
     }
   }
 
-  throw new Error(
-    "Gemini did not return an image. The model may not support image generation with the current configuration.",
-  );
+  throw lastError || new Error("Image generation failed after retries");
 }
 
 export async function generateMultipleAds(

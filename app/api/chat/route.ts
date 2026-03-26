@@ -17,7 +17,7 @@ type ChatRequest = {
 export async function POST(request: Request) {
   if (!hasAI()) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY is not configured." },
+      { error: "GEMINI_API_KEY(S) not configured. Add to .env" },
       { status: 500 },
     );
   }
@@ -45,15 +45,10 @@ export async function POST(request: Request) {
   const context: FridayContext = body.brandContext ?? {};
 
   try {
-    const stream = runFridayChat(body.message, agentId, context);
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "Transfer-Encoding": "chunked",
-      },
-    });
+    return NextResponse.json(
+      { error: "Friday chat is temporarily disabled. Use the Analyze feature instead." },
+      { status: 503 },
+    );
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Agent execution failed.";

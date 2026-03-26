@@ -11,7 +11,7 @@ export function HomePage() {
 
   useEffect(() => {
     if (canLoadWorkspace && session) {
-      router.replace("/dashboard");
+      router.replace("/waitlist");
     }
   }, [canLoadWorkspace, session, router]);
 
@@ -48,7 +48,7 @@ export function HomePage() {
           fontSize: "0.9rem",
         }}
       >
-        Redirecting to dashboard...
+        Redirecting to waitlist...
       </div>
     );
   }

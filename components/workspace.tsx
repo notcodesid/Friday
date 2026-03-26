@@ -49,6 +49,12 @@ type WorkspaceProps = {
   brandContext: FridayContext;
 };
 
+type FriendlySocialCopyError = {
+  title: string;
+  body: string;
+  hint: string;
+};
+
 function copyText(text: string) {
   return navigator.clipboard.writeText(text);
 }
@@ -125,6 +131,76 @@ function extractSocialCopyError(raw: string) {
   return null;
 }
 
+function getFriendlySocialCopyError(error: string | null): FriendlySocialCopyError | null {
+  const trimmed = error?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = trimmed.toLowerCase();
+
+  if (
+    normalized.includes("tweet playbook") ||
+    normalized.includes("playbook could not be loaded") ||
+    normalized.includes("social copy is disabled until") ||
+    normalized.includes("temporarily unavailable because the tweet playbook")
+  ) {
+    return {
+      title: "Our tweet chef lost the recipe card.",
+      body: "Friday knows it should cook social copy here, but the playbook is not loaded on the server right now.",
+      hint: "Give it another try after the latest deploy settles. If it keeps happening, the playbook asset needs to be available in production.",
+    };
+  }
+
+  if (
+    normalized.includes("quota exceeded") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("usage limits") ||
+    normalized.includes("billing details") ||
+    normalized.includes("free_tier_requests") ||
+    normalized.includes("credits")
+  ) {
+    return {
+      title: "We are briefly broke and the AI intern wants KPI money.",
+      body: "The social-copy run hit the model quota wall, so the copy machine is refusing overtime for a minute.",
+      hint: "Wait a bit and hit retry. If this keeps repeating, we need more credits or a higher rate limit on the provider side.",
+    };
+  }
+
+  if (
+    normalized.includes("timed out") ||
+    normalized.includes("timeout") ||
+    normalized.includes("fetch failed") ||
+    normalized.includes("network") ||
+    normalized.includes("socket hang up")
+  ) {
+    return {
+      title: "The copy machine is buffering like airport Wi-Fi.",
+      body: "The request stalled before Friday could finish the social pack.",
+      hint: "Retry once. If it happens again, the upstream model or network path is having a bad day.",
+    };
+  }
+
+  if (
+    normalized.includes("did not return valid social copy") ||
+    normalized.includes("empty social copy response") ||
+    normalized.includes("failed to generate valid social copy") ||
+    normalized.includes("invalid json")
+  ) {
+    return {
+      title: "The AI wrote nonsense and tried to call it strategy.",
+      body: "Friday got a response back, but it was not usable as a clean social copy pack.",
+      hint: "Retry to get a fresh run. If it keeps happening, the prompt or model output format needs tightening.",
+    };
+  }
+
+  return {
+    title: "The social-copy gremlin dropped the clipboard.",
+    body: "Something went wrong while generating the posts, but it was not one of our usual dramatic failures.",
+    hint: "Hit retry once. If it still fails, check the deployment logs for the exact backend issue.",
+  };
+}
+
 function isValidSocialCopy(data: SocialCopy) {
   if (extractSocialCopyError(data.raw)) {
     return false;
@@ -172,6 +248,7 @@ export function Workspace({
   const domain = (() => {
     try { return new URL(siteUrl).hostname.replace(/^www\./, ""); } catch { return siteUrl; }
   })();
+  const friendlyCopyError = getFriendlySocialCopyError(copyError);
 
   const headers = useMemo(() => {
     const nextHeaders: Record<string, string> = {};
@@ -491,8 +568,23 @@ export function Workspace({
               )}
 
               {copyError && (
-                <div className="rounded-[24px] border border-[#7f1d1d] bg-[#2a0d0d] p-4 text-sm text-[#fca5a5]">
-                  {copyError}
+                <div className="rounded-[24px] border border-[#7f1d1d] bg-[#2a0d0d] p-5">
+                  <div className="text-[1rem] font-semibold tracking-[-0.03em] text-[#fecaca]">
+                    {friendlyCopyError?.title ?? "Social copy hit a snag."}
+                  </div>
+                  <p className="mt-2 text-sm leading-7 text-[#fca5a5]">
+                    {friendlyCopyError?.body ?? copyError}
+                  </p>
+                  {friendlyCopyError?.hint && (
+                    <>
+                      <div className="mt-4 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[#fca5a5]/72">
+                        Helpful hint
+                      </div>
+                      <p className="mt-2 text-sm leading-7 text-[#fecaca]/86">
+                        {friendlyCopyError.hint}
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
 
