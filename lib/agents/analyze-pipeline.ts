@@ -1,5 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
-
 import { getAnthropicClient } from "@/lib/agents/core/client";
 import {
   runCompetitorDiscoveryAgent,
@@ -18,10 +16,19 @@ import { inspectWebsite } from "@/lib/site/inspect";
 import { analyzeBrand } from "@/lib/tools/web";
 
 /* ------------------------------------------------------------------ */
-/*  JSON schemas for Anthropic tool_use structured output               */
+/*  JSON schemas for tool structured output                             */
 /* ------------------------------------------------------------------ */
 
-const productAnalysisJsonSchema: Anthropic.Tool["input_schema"] = {
+type JSONSchema = {
+  type?: string;
+  properties?: Record<string, unknown>;
+  required?: string[];
+  items?: unknown;
+  maxItems?: number;
+  description?: string;
+};
+
+const productAnalysisJsonSchema: JSONSchema = {
   type: "object",
   properties: {
     brandName: { type: "string" },
@@ -42,7 +49,7 @@ const productAnalysisJsonSchema: Anthropic.Tool["input_schema"] = {
   required: ["brandName", "oneLiner", "positioning", "targetAudience", "painPoints", "differentiators", "primaryCta", "brandVoice", "techStack", "socialLinks"],
 };
 
-const competitorAnalysisJsonSchema: Anthropic.Tool["input_schema"] = {
+const competitorAnalysisJsonSchema: JSONSchema = {
   type: "object",
   properties: {
     name: { type: "string" },
@@ -67,7 +74,7 @@ const competitorAnalysisJsonSchema: Anthropic.Tool["input_schema"] = {
   required: ["name", "domain", "positioning", "targetAudience", "strengths", "weaknesses", "contentStrategy", "techStack"],
 };
 
-const competitiveInsightsJsonSchema: Anthropic.Tool["input_schema"] = {
+const competitiveInsightsJsonSchema: JSONSchema = {
   type: "object",
   properties: {
     opportunities: { type: "array", items: { type: "string" }, maxItems: 6, description: "Market opportunities for the user's product" },
@@ -93,7 +100,11 @@ function sendEvent(
   );
 }
 
-function extractToolResult(response: Anthropic.Message): unknown {
+type AIMessage = {
+  content: Array<{ type: string; text?: string; input?: unknown; name?: string }>;
+};
+
+function extractToolResult(response: AIMessage): unknown {
   for (const block of response.content) {
     if (block.type === "tool_use") {
       return block.input;
@@ -101,7 +112,7 @@ function extractToolResult(response: Anthropic.Message): unknown {
   }
   // Fallback: try to parse text as JSON
   for (const block of response.content) {
-    if (block.type === "text") {
+    if (block.type === "text" && block.text) {
       const match = block.text.match(/\{[\s\S]*\}/);
       if (match) return JSON.parse(match[0]);
     }

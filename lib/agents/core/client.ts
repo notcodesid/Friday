@@ -31,6 +31,7 @@ class MessagesAPI {
     messages: Array<{ role: string; content: string }>;
     model?: string;
     max_tokens?: number;
+    temperature?: number;
     stream?: boolean;
     system?: string;
     tools?: Array<{
@@ -110,6 +111,7 @@ class GeminiAdapter {
     messages: Array<{ role: string; content: string }>;
     model?: string;
     max_tokens?: number;
+    temperature?: number;
     stream?: boolean;
     system?: string;
     tools?: Array<{
@@ -120,7 +122,18 @@ class GeminiAdapter {
     tool_choice?: { type: string; name?: string };
   }): Promise<AnthropicMessage> {
     this.updateClient();
-    const model = this.client!.getGenerativeModel({ model: this.modelName });
+    const generationConfig: Record<string, unknown> = {
+      maxOutputTokens: params.max_tokens,
+    };
+    
+    if (params.temperature !== undefined) {
+      generationConfig.temperature = params.temperature;
+    }
+    
+    const model = this.client!.getGenerativeModel({ 
+      model: this.modelName,
+      generationConfig,
+    });
     
     const maxRetries = this.keys.length * 2;
     let attempts = 0;
