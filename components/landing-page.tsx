@@ -714,7 +714,7 @@ export function LandingPage() {
             </div>
           </div>
         </section>
-
+{/* 
         <section id="pricing" className="border-t border-white/8 px-6 py-20 md:px-10 md:py-24">
           <div className="mx-auto max-w-[1360px]">
             <SolanaPricing
@@ -723,7 +723,7 @@ export function LandingPage() {
               description="Friday now supports direct Solana payments. Users connect Phantom or another injected wallet, choose a monthly plan, and send a verified transfer to the merchant wallet tied to the product."
             />
           </div>
-        </section>
+        </section> */}
 
         <section id="process" className="bg-[#f5f1eb] px-6 py-20 text-[#111111] md:px-10 md:py-24">
           <div className="mx-auto max-w-[1360px]">
